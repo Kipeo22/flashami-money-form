@@ -1,0 +1,10 @@
+{
+  "name": "flashami-money-form",
+  "version": "1.0.0",
+  "description": "Discord expense form for travel event operations",
+  "private": true,
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module"
+}
