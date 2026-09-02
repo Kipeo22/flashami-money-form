@@ -13,12 +13,13 @@ import sharp from 'sharp';
 import { parseAmountYen } from '../domain/amount.js';
 import { classifyTargets, TargetSelectionError } from '../domain/target.js';
 import type { Expense, Person } from '../domain/types.js';
-import type { GasRepository } from '../gas/repository.js';
-import { buildExpenseButtonRow, buildExpenseModal } from './components.js';
+import { ExpenseConflictError, type GasRepository } from '../gas/repository.js';
+import { buildExpenseModal } from './components.js';
 import { COMMANDS, COMPONENTS, eventIdFromComponent } from './ids.js';
 
 const MAX_RECEIPT_BYTES = 20 * 1000 * 1000;
 const MAX_GAS_BINARY_BYTES = 8 * 1024 * 1024;
+const WORKING_MESSAGE = '作業中...';
 const allowedReceiptExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.pdf']);
 
 export function registerInteractionHandler(
@@ -44,31 +45,8 @@ export function registerInteractionHandler(
           return;
         }
 
-        if (interaction.commandName === COMMANDS.postForm) {
-          const guildId = requiredContext(interaction.guildId, 'Discordサーバー');
-          const channelId = requiredContext(interaction.channelId, 'Discordチャンネル');
-          await interaction.deferReply();
-          const event = await repository.findActiveEvent(guildId, channelId);
-          if (!event) {
-            throw new UserInputError(
-              'このチャンネルに有効なイベントがありません。先にWeb管理画面でイベントを作成してください。',
-            );
-          }
-          eventNames.set(event.id, event.name);
-          await interaction.editReply({
-            content: [
-              `### ${event.name}の支出登録`,
-              'ボタンから支払者・対象者・内容・金額・レシートを入力してください。',
-              `共通予算から出す支出は「誰の分？」で <@&${event.operationsRoleId}> だけを選択します。`,
-            ].join('\n'),
-            components: [buildExpenseButtonRow(event.id)],
-            allowedMentions: { parse: [] },
-          });
-          return;
-        }
-
         if (interaction.commandName === COMMANDS.refresh) {
-          await interaction.deferReply();
+          await interaction.reply(WORKING_MESSAGE);
           const guildId = requiredContext(interaction.guildId, 'Discordサーバー');
           const channelId = requiredContext(interaction.channelId, 'Discordチャンネル');
           const event = await repository.findActiveEvent(guildId, channelId);
@@ -115,7 +93,7 @@ async function handleExpenseModal(
   logger: Logger,
   queue: SerialQueue,
 ): Promise<void> {
-  await interaction.deferReply();
+  await interaction.reply(WORKING_MESSAGE);
 
   const event = await repository.getEvent(eventId);
   if (!event || event.status !== 'active') {
@@ -144,8 +122,6 @@ async function handleExpenseModal(
   const preparedReceipt = receipt ? await downloadReceipt(receipt) : null;
 
   const result = await queue.run(async () => {
-    if (await repository.hasExpense(interaction.id, event.id)) return { duplicate: true } as const;
-
     const uploaded = preparedReceipt
       ? await repository.uploadReceipt(
           {
@@ -181,13 +157,8 @@ async function handleExpenseModal(
           logger.error({ err: cleanupError, fileId: uploaded.id }, 'receipt rollback failed');
         });
       }
+      if (error instanceof ExpenseConflictError) return { duplicate: true } as const;
       throw error;
-    }
-
-    try {
-      await repository.refreshAggregations();
-    } catch (error) {
-      logger.error({ err: error, expenseId: expense.id }, 'aggregation refresh failed');
     }
     return { duplicate: false, expense } as const;
   });
@@ -199,7 +170,7 @@ async function handleExpenseModal(
 
   const targetText =
     result.expense.target.type === 'operations'
-      ? '運営（共通予算）'
+      ? '運営'
       : result.expense.target.members.map(({ name }) => name).join('、');
   const lines = [
     `「${result.expense.event.name}」に支出を登録しました。`,
@@ -207,7 +178,7 @@ async function handleExpenseModal(
     `誰の？ ${targetText}`,
     `何を？ ${result.expense.item}`,
     `いくら？ ${result.expense.amountYen.toLocaleString('ja-JP')}円`,
-    `レシート: ${receipt ? '添付あり' : 'なし'}`,
+    receipt ? 'レシート:' : 'レシート: なし',
   ];
   const content = lines.join('\n');
   if (preparedReceipt) {
@@ -218,6 +189,11 @@ async function handleExpenseModal(
   } else {
     await interaction.editReply({ content });
   }
+  void queue
+    .run(() => repository.refreshAggregations())
+    .catch((error: unknown) => {
+      logger.error({ err: error, expenseId: result.expense.id }, 'aggregation refresh failed');
+    });
 }
 
 function memberHasRole(interaction: ChatInputCommandInteraction, roleId: string): boolean {

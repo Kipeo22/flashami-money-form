@@ -3,7 +3,12 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../config.js';
-import { EventConfigurationError, EventConflictError, GasRepository } from './repository.js';
+import {
+  EventConfigurationError,
+  EventConflictError,
+  ExpenseConflictError,
+  GasRepository,
+} from './repository.js';
 
 const sharedSecret = 'a-secure-shared-secret-with-32-chars';
 const config = loadConfig({
@@ -189,6 +194,41 @@ describe('GasRepository', () => {
     });
   });
 
+  it('maps a duplicate append to the domain error', async () => {
+    const repository = new GasRepository(
+      config,
+      mockFetch(() => ({
+        ok: false,
+        error: { code: 'EXPENSE_CONFLICT', message: 'この支出は登録済みです。' },
+      })),
+    );
+
+    await expect(repository.appendExpense(exampleExpense())).rejects.toBeInstanceOf(
+      ExpenseConflictError,
+    );
+  });
+
+  it('accepts an ambiguous append response when the expense was stored', async () => {
+    let calls = 0;
+    const fetchImplementation: typeof fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response('<html>temporary response</html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, data: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const repository = new GasRepository(config, fetchImplementation);
+
+    await expect(repository.appendExpense(exampleExpense())).resolves.toBeUndefined();
+    expect(calls).toBe(2);
+  });
+
   it('reads legacy operations expenses whose target name contains 運営', async () => {
     const repository = new GasRepository(
       config,
@@ -258,6 +298,24 @@ describe('GasRepository', () => {
     await expect(repository.refreshAggregations()).resolves.toBeUndefined();
   });
 });
+
+function exampleExpense() {
+  return {
+    id: 'expense-1',
+    event: { id: 'event-1', name: '夏合宿' },
+    createdAt: '2026-09-02T00:00:00.000Z',
+    guildId: '123456789012345678',
+    channelId: '323456789012345678',
+    submittedBy: { id: 'user-1', name: '登録者' },
+    payer: { id: 'user-2', name: '支払者' },
+    target: { type: 'operations' as const },
+    item: 'ガソリン代',
+    amountYen: 5_000,
+    receiptFileId: '',
+    receiptUrl: '',
+    receiptName: '',
+  };
+}
 
 type SignedRequest = {
   action: string;

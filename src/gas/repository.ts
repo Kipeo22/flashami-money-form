@@ -144,7 +144,21 @@ export class GasRepository {
   }
 
   async appendExpense(expense: Expense): Promise<void> {
-    await this.request('appendExpense', { row: expenseToRow(expense) });
+    try {
+      await this.request('appendExpense', { row: expenseToRow(expense) });
+    } catch (error) {
+      if (error instanceof GasApiError && error.code === 'EXPENSE_CONFLICT') {
+        throw new ExpenseConflictError(error.message);
+      }
+      if (error instanceof RetryableGasTransportError) {
+        try {
+          if (await this.hasExpense(expense.id, expense.event.id)) return;
+        } catch {
+          // Keep the original append error when reconciliation also fails.
+        }
+      }
+      throw error;
+    }
   }
 
   async refreshAggregations(): Promise<void> {
@@ -262,6 +276,7 @@ export class GasRepository {
 
 export class EventConflictError extends Error {}
 export class EventConfigurationError extends Error {}
+export class ExpenseConflictError extends Error {}
 
 class GasApiError extends Error {
   constructor(

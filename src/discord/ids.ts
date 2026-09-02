@@ -1,5 +1,4 @@
 export const COMMANDS = {
-  postForm: '支出フォーム',
   registerExpense: '支出登録',
   refresh: '集計更新',
 } as const;

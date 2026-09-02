@@ -11,5 +11,6 @@ describe('Discord commands', () => {
       description: '支出登録フォームを開きます',
     });
     expect(command?.default_member_permissions).toBeUndefined();
+    expect(commandDefinitions.some(({ name }) => name === '支出フォーム')).toBe(false);
   });
 });
