@@ -1,6 +1,6 @@
 # flashami-money-form
 
-旅行イベント向けの支出入力・集計Discord Botです。簡素なWeb管理画面から複数イベントを作成し、Discordのモーダルから入力した支出をイベント別にGoogle SheetsとGoogle Driveへ保存します。
+旅行イベント向けの支出入力・集計Discord Botです。簡素なWeb管理画面から複数イベントを作成し、Discordのモーダルから入力した支出をGoogle Apps Script（GAS）経由でイベント別にGoogle SheetsとGoogle Driveへ保存します。
 
 ## MVPの動作
 
@@ -49,9 +49,7 @@
 - Node.js 24以上
 - Discord Application / Bot
 - Discordサーバー内の `運営` ロール
-- Google Cloudプロジェクト
-- Google Sheets API
-- Google Drive API
+- GoogleアカウントとGoogle Apps Script
 - 保存先のGoogleスプレッドシートとDriveフォルダ
 
 ## セットアップ
@@ -82,60 +80,78 @@ BotトークンはGit、Discordメッセージ、チャットへ貼り付けな�
 
 ### 3. Google
 
-Google SheetsとGoogle Driveは別の認証を使用します。
+BotはGoogle APIへ直接接続せず、GAS Webアプリへ署名付きHTTPSリクエストを送ります。サービスアカウント鍵やOAuthリフレッシュトークンは不要です。
 
-- 支出・精算データ: 会社のGoogle Sheets
-- レシート: 個人のGoogle Drive
+#### 3-1. 保存先を用意する
 
-#### 会社Sheets
+GASを所有するGoogleアカウントから編集できる、次の2つを用意します。
 
-推奨構成では、会社のGoogle CloudプロジェクトでGoogle Sheets APIを有効にし、サービスアカウントを作成します。対象スプレッドシートをサービスアカウントのメールアドレスへ編集者として共有してください。
+1. 空のGoogleスプレッドシート
+2. レシート保存先のGoogle Driveフォルダ
 
-```dotenv
-GOOGLE_SPREADSHEET_ID=
-SHEETS_AUTH_MODE=service-account
-SHEETS_CLIENT_EMAIL=
-SHEETS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-```
+会社Sheetsと個人Driveを組み合わせる場合は、GAS所有者のアカウントへ両方の編集権限を付けてください。会社の外部共有ポリシーで許可されない場合は、会社アカウントでGASを作り、会社Driveを保存先にします。
 
-会社ポリシー上サービスアカウントを利用できない場合は、会社アカウントのOAuthも選択できます。
-
-```dotenv
-SHEETS_AUTH_MODE=oauth
-SHEETS_OAUTH_CLIENT_ID=
-SHEETS_OAUTH_CLIENT_SECRET=
-SHEETS_REFRESH_TOKEN=
-```
-
-Sheets用OAuthトークンは次のコマンドで取得します。
-
-```bash
-npm run google:auth -- sheets
-```
-
-#### 個人Drive
-
-個人アカウント側のGoogle CloudプロジェクトでGoogle Drive APIを有効にしてOAuthクライアントを作成します。OAuthクライアントには次のリダイレクトURIを登録します。
+URLからそれぞれのIDを控えます。
 
 ```text
-http://127.0.0.1:53682/oauth2callback
+https://docs.google.com/spreadsheets/d/ここがSPREADSHEET_ID/edit
+https://drive.google.com/drive/folders/ここがDRIVE_FOLDER_ID
 ```
 
-```dotenv
-GOOGLE_DRIVE_FOLDER_ID=
-DRIVE_AUTH_MODE=oauth
-DRIVE_OAUTH_CLIENT_ID=
-DRIVE_OAUTH_CLIENT_SECRET=
-DRIVE_REFRESH_TOKEN=
-```
+#### 3-2. GASプロジェクトを作る
 
-個人GoogleアカウントでDrive用OAuthトークンを取得します。
+1. [Google Apps Script](https://script.google.com/)で「新しいプロジェクト」を作成する
+2. `コード.gs` の内容を削除し、[`gas/Code.gs`](./gas/Code.gs) を貼り付ける
+3. GASの「プロジェクトの設定」で「マニフェスト ファイルをエディタで表示する」を有効にする
+4. `appsscript.json` を開き、[`gas/appsscript.json`](./gas/appsscript.json) の内容へ置き換える
+
+#### 3-3. スクリプトプロパティを設定する
+
+GASの「プロジェクトの設定」→「スクリプト プロパティ」へ次の3項目を追加します。
+
+| プロパティ        | 値                                   |
+| ----------------- | ------------------------------------ |
+| `SPREADSHEET_ID`  | 保存先スプレッドシートID             |
+| `DRIVE_FOLDER_ID` | レシート親フォルダID                 |
+| `SHARED_SECRET`   | BotとGASだけが知る32文字以上の秘密値 |
+
+秘密値はMacのターミナルで生成できます。
 
 ```bash
-npm run google:auth -- drive
+openssl rand -hex 32
 ```
 
-表示された `DRIVE_REFRESH_TOKEN` を `.env` へ保存します。会社Sheetsの認証情報と個人DriveのOAuth情報は互いに共有されません。秘密鍵・クライアントシークレット・リフレッシュトークンはGitやチャットへ貼り付けないでください。
+この値は後で `.env` の `GAS_SHARED_SECRET` にも同じものを設定します。チャットやGitへ貼り付けないでください。
+
+#### 3-4. GASを承認・初期化する
+
+1. GASエディタ上部の関数一覧で `setup` を選ぶ
+2. 「実行」を押す
+3. GAS所有者のGoogleアカウントでSheets／Drive権限を承認する
+4. 保存先スプレッドシートに `イベント`、`支出`、`精算`、`予算集計` が作られたことを確認する
+
+以前の単一イベント版のスプレッドシートも、従来どおりヘッダーを自動拡張します。
+
+#### 3-5. Webアプリとしてデプロイする
+
+1. GAS右上の「デプロイ」→「新しいデプロイ」
+2. 種類は「ウェブアプリ」
+3. 「次のユーザーとして実行」は `自分`
+4. 「アクセスできるユーザー」は `全員`
+5. 「デプロイ」を押し、末尾が `/exec` のWebアプリURLをコピーする
+
+会社のGoogle Workspaceで「全員」を選択できない場合、管理者ポリシーにより匿名Webアプリが禁止されています。このBotから利用するには、管理者に許可を相談するか、利用可能な別アカウントでGASを所有してください。
+
+GASコードを更新したときは、「デプロイを管理」から新しいバージョンへ更新します。テスト用の `/dev` URLではなく、本番デプロイの `/exec` URLを使用してください。
+
+#### 3-6. Botの `.env` を設定する
+
+```dotenv
+GAS_WEB_APP_URL=https://script.google.com/macros/s/デプロイID/exec
+GAS_SHARED_SECRET=スクリプトプロパティと同じ秘密値
+```
+
+Botはリクエスト本文をHMAC-SHA256で署名します。GAS側では署名、有効時刻、リクエストの再利用、入力値を検証してからSheets／Driveを操作します。
 
 ### 4. コマンド登録と起動
 
@@ -155,7 +171,7 @@ npm run commands:register
 npm run dev
 ```
 
-起動後、`http://127.0.0.1:3000` を開くとイベント作成・一覧画面を利用できます。イベントを作成してから、そのイベントに設定したDiscordチャンネルで `/支出フォーム` を実行してください。
+起動時に `GAS connection initialized` が表示されれば、GAS経由で初期化と集計更新まで完了しています。起動後、`http://127.0.0.1:3000` を開くとイベント作成・一覧画面を利用できます。イベントを作成してから、そのイベントに設定したDiscordチャンネルで `/支出フォーム` を実行してください。
 
 1つのBotプロセスで複数イベントを管理するため、イベントごとの再デプロイは不要です。Botを停止するとDiscord入力と管理画面を利用できないため、運用時は常時起動できる環境が必要です。
 

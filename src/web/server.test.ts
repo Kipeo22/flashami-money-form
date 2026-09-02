@@ -9,15 +9,8 @@ const config = loadConfig({
   DISCORD_CLIENT_ID: '123456789012345678',
   DISCORD_GUILD_ID: '123456789012345678',
   OPERATIONS_ROLE_ID: '223456789012345678',
-  GOOGLE_SPREADSHEET_ID: 'sheet',
-  GOOGLE_DRIVE_FOLDER_ID: 'folder',
-  SHEETS_AUTH_MODE: 'service-account',
-  SHEETS_CLIENT_EMAIL: 'bot@example.com',
-  SHEETS_PRIVATE_KEY: 'private-key',
-  DRIVE_AUTH_MODE: 'oauth',
-  DRIVE_OAUTH_CLIENT_ID: 'client',
-  DRIVE_OAUTH_CLIENT_SECRET: 'secret',
-  DRIVE_REFRESH_TOKEN: 'refresh',
+  GAS_WEB_APP_URL: 'https://script.google.com/macros/s/deployment/exec',
+  GAS_SHARED_SECRET: 'a-secure-shared-secret-with-32-chars',
   ADMIN_PASSWORD: 'long-test-password',
 });
 

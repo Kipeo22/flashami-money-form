@@ -7,51 +7,37 @@ const common = {
   DISCORD_CLIENT_ID: '123456789012345678',
   DISCORD_GUILD_ID: '123456789012345678',
   OPERATIONS_ROLE_ID: '223456789012345678',
-  GOOGLE_SPREADSHEET_ID: 'company-sheet',
-  GOOGLE_DRIVE_FOLDER_ID: 'personal-folder',
-  DRIVE_OAUTH_CLIENT_ID: 'personal-client',
-  DRIVE_OAUTH_CLIENT_SECRET: 'personal-secret',
-  DRIVE_REFRESH_TOKEN: 'personal-refresh',
+  GAS_WEB_APP_URL: 'https://script.google.com/macros/s/deployment/exec',
+  GAS_SHARED_SECRET: 'a-secure-shared-secret-with-32-chars',
   ADMIN_PASSWORD: 'long-test-password',
 };
 
 describe('loadConfig', () => {
-  it('separates company Sheets service account and personal Drive OAuth', () => {
-    const config = loadConfig({
-      ...common,
-      SHEETS_AUTH_MODE: 'service-account',
-      SHEETS_CLIENT_EMAIL: 'bot@company.example',
-      SHEETS_PRIVATE_KEY: 'line1\\nline2',
-    });
+  it('loads the GAS Web API configuration', () => {
+    const config = loadConfig(common);
 
-    expect(config.google.sheetsAuth).toEqual({
-      mode: 'service-account',
-      clientEmail: 'bot@company.example',
-      privateKey: 'line1\nline2',
-    });
-    expect(config.google.driveAuth).toEqual({
-      mode: 'oauth',
-      clientId: 'personal-client',
-      clientSecret: 'personal-secret',
-      refreshToken: 'personal-refresh',
+    expect(config.gas).toEqual({
+      webAppUrl: 'https://script.google.com/macros/s/deployment/exec',
+      sharedSecret: 'a-secure-shared-secret-with-32-chars',
     });
   });
 
-  it('also supports company Sheets OAuth independently', () => {
+  it('requires a long shared secret and HTTPS URL', () => {
+    expect(() =>
+      loadConfig({
+        ...common,
+        GAS_WEB_APP_URL: 'http://example.com/gas',
+        GAS_SHARED_SECRET: 'short',
+      }),
+    ).toThrow(/GAS_WEB_APP_URL|GAS_SHARED_SECRET/);
+  });
+
+  it('keeps the web defaults', () => {
     const config = loadConfig({
       ...common,
-      SHEETS_AUTH_MODE: 'oauth',
-      SHEETS_OAUTH_CLIENT_ID: 'company-client',
-      SHEETS_OAUTH_CLIENT_SECRET: 'company-secret',
-      SHEETS_REFRESH_TOKEN: 'company-refresh',
     });
 
-    expect(config.google.sheetsAuth).toEqual({
-      mode: 'oauth',
-      clientId: 'company-client',
-      clientSecret: 'company-secret',
-      refreshToken: 'company-refresh',
-    });
-    expect(config.google.driveAuth.refreshToken).toBe('personal-refresh');
+    expect(config.web.host).toBe('127.0.0.1');
+    expect(config.web.port).toBe(3000);
   });
 });

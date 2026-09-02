@@ -5,7 +5,7 @@ import type { Logger } from 'pino';
 import { parseAmountYen } from '../domain/amount.js';
 import { classifyTargets, TargetSelectionError } from '../domain/target.js';
 import type { Expense, Person } from '../domain/types.js';
-import type { GoogleRepository } from '../google/repository.js';
+import type { GasRepository } from '../gas/repository.js';
 import { buildExpenseButtonRow, buildExpenseModal } from './components.js';
 import { COMMANDS, COMPONENTS, eventIdFromComponent } from './ids.js';
 
@@ -14,7 +14,7 @@ const allowedReceiptExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.he
 
 export function registerInteractionHandler(
   client: Client,
-  repository: GoogleRepository,
+  repository: GasRepository,
   logger: Logger,
 ): void {
   const queue = new SerialQueue();
@@ -80,7 +80,7 @@ export function registerInteractionHandler(
 async function handleExpenseModal(
   interaction: ModalSubmitInteraction,
   eventId: string,
-  repository: GoogleRepository,
+  repository: GasRepository,
   logger: Logger,
   queue: SerialQueue,
 ): Promise<void> {

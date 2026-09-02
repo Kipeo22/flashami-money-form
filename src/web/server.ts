@@ -5,7 +5,7 @@ import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config.js';
 import type { CreateEventInput, EventRecord } from '../domain/types.js';
-import { EventConflictError } from '../google/repository.js';
+import { EventConflictError } from '../gas/repository.js';
 
 type Flash = { type: 'success' | 'error'; message: string };
 
@@ -92,7 +92,7 @@ export function startWebServer(
       const message =
         error instanceof WebInputError || error instanceof EventConflictError
           ? error.message
-          : '処理に失敗しました。Google SheetsとDriveの設定を確認してください。';
+          : '処理に失敗しました。GAS Webアプリの設定を確認してください。';
       const events = await repository.listEvents().catch(() => []);
       sendHtml(
         response,

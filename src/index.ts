@@ -3,12 +3,12 @@ import pino from 'pino';
 
 import { loadConfig } from './config.js';
 import { registerInteractionHandler } from './discord/handler.js';
-import { GoogleRepository } from './google/repository.js';
+import { GasRepository } from './gas/repository.js';
 import { startWebServer } from './web/server.js';
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel });
-const repository = new GoogleRepository(config);
+const repository = new GasRepository(config);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -18,7 +18,7 @@ client.on(Events.Error, (error) => logger.error({ err: error }, 'Discord client 
 registerInteractionHandler(client, repository, logger);
 
 await repository.initialize();
-logger.info('Google Sheets and Drive connection initialized');
+logger.info('GAS connection initialized');
 await client.login(config.discord.token);
 const webServer = await startWebServer(config, repository, logger);
 logger.info(

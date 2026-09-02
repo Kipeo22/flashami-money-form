@@ -11,13 +11,13 @@
     "dev": "node --env-file=.env --import tsx src/index.ts",
     "start": "node --env-file=.env dist/src/index.js",
     "commands:register": "node --env-file=.env --import tsx scripts/register-commands.ts",
-    "google:auth": "node --env-file=.env --import tsx scripts/google-auth.ts",
+    "gas:check": "node scripts/check-gas.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build"
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run gas:check && npm test && npm run build"
   },
   "keywords": [],
   "author": "",
@@ -25,7 +25,6 @@
   "type": "module",
   "dependencies": {
     "discord.js": "^14.27.0",
-    "googleapis": "^160.0.0",
     "pino": "^9.14.0",
     "zod": "^4.5.2"
   },
