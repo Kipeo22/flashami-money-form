@@ -82,45 +82,60 @@ BotトークンはGit、Discordメッセージ、チャットへ貼り付けな�
 
 ### 3. Google
 
-Google CloudでGoogle Sheets APIとGoogle Drive APIを有効にします。個人のマイドライブを使う場合はOAuth 2.0、Google Workspaceの共有ドライブを使う場合はサービスアカウントを利用できます。
+Google SheetsとGoogle Driveは別の認証を使用します。
 
-#### OAuth 2.0
+- 支出・精算データ: 会社のGoogle Sheets
+- レシート: 個人のGoogle Drive
 
-OAuthクライアントに次のリダイレクトURIを登録します。
+#### 会社Sheets
+
+推奨構成では、会社のGoogle CloudプロジェクトでGoogle Sheets APIを有効にし、サービスアカウントを作成します。対象スプレッドシートをサービスアカウントのメールアドレスへ編集者として共有してください。
+
+```dotenv
+GOOGLE_SPREADSHEET_ID=
+SHEETS_AUTH_MODE=service-account
+SHEETS_CLIENT_EMAIL=
+SHEETS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+```
+
+会社ポリシー上サービスアカウントを利用できない場合は、会社アカウントのOAuthも選択できます。
+
+```dotenv
+SHEETS_AUTH_MODE=oauth
+SHEETS_OAUTH_CLIENT_ID=
+SHEETS_OAUTH_CLIENT_SECRET=
+SHEETS_REFRESH_TOKEN=
+```
+
+Sheets用OAuthトークンは次のコマンドで取得します。
+
+```bash
+npm run google:auth -- sheets
+```
+
+#### 個人Drive
+
+個人アカウント側のGoogle CloudプロジェクトでGoogle Drive APIを有効にしてOAuthクライアントを作成します。OAuthクライアントには次のリダイレクトURIを登録します。
 
 ```text
 http://127.0.0.1:53682/oauth2callback
 ```
 
-`.env` にクライアント情報と保存先IDを設定します。
-
 ```dotenv
-GOOGLE_AUTH_MODE=oauth
-GOOGLE_OAUTH_CLIENT_ID=
-GOOGLE_OAUTH_CLIENT_SECRET=
-GOOGLE_SPREADSHEET_ID=
 GOOGLE_DRIVE_FOLDER_ID=
+DRIVE_AUTH_MODE=oauth
+DRIVE_OAUTH_CLIENT_ID=
+DRIVE_OAUTH_CLIENT_SECRET=
+DRIVE_REFRESH_TOKEN=
 ```
 
-次を実行し、表示されたURLをブラウザで開きます。
+個人GoogleアカウントでDrive用OAuthトークンを取得します。
 
 ```bash
-npm run google:auth
+npm run google:auth -- drive
 ```
 
-ターミナルに表示された `GOOGLE_REFRESH_TOKEN` を `.env` へ保存します。この値もGitやチャットへ貼り付けないでください。
-
-#### サービスアカウント
-
-サービスアカウントはファイルを所有できないため、Google Workspaceの共有ドライブを保存先にしてください。共有ドライブとスプレッドシートをサービスアカウントへ共有します。
-
-```dotenv
-GOOGLE_AUTH_MODE=service-account
-GOOGLE_CLIENT_EMAIL=
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GOOGLE_SPREADSHEET_ID=
-GOOGLE_DRIVE_FOLDER_ID=
-```
+表示された `DRIVE_REFRESH_TOKEN` を `.env` へ保存します。会社Sheetsの認証情報と個人DriveのOAuth情報は互いに共有されません。秘密鍵・クライアントシークレット・リフレッシュトークンはGitやチャットへ貼り付けないでください。
 
 ### 4. コマンド登録と起動
 

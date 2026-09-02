@@ -2,20 +2,29 @@ import { createServer } from 'node:http';
 
 import { google } from 'googleapis';
 
-import { GOOGLE_SCOPES } from '../src/google/auth.js';
+import { DRIVE_SCOPES, SHEETS_SCOPES } from '../src/google/auth.js';
 
-const clientId = requiredEnv('GOOGLE_OAUTH_CLIENT_ID');
-const clientSecret = requiredEnv('GOOGLE_OAUTH_CLIENT_SECRET');
+const target = process.argv[2] ?? 'drive';
+if (target !== 'drive' && target !== 'sheets') {
+  throw new Error('対象は drive または sheets を指定してください。');
+}
+
+const prefix = target === 'drive' ? 'DRIVE' : 'SHEETS';
+const clientId = requiredEnv(`${prefix}_OAUTH_CLIENT_ID`);
+const clientSecret = requiredEnv(`${prefix}_OAUTH_CLIENT_SECRET`);
+const scopes = target === 'drive' ? DRIVE_SCOPES : SHEETS_SCOPES;
 const port = 53_682;
 const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
 const client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 const authUrl = client.generateAuthUrl({
   access_type: 'offline',
   prompt: 'consent',
-  scope: GOOGLE_SCOPES,
+  scope: scopes,
 });
 
-console.log('次のURLをブラウザで開き、Googleアカウントで許可してください。');
+console.log(
+  `次のURLをブラウザで開き、${target === 'drive' ? '個人Drive' : '会社Sheets'}へのアクセスを許可してください。`,
+);
 console.log(authUrl);
 console.log(`OAuthクライアントにはリダイレクトURI ${redirectUri} を登録してください。`);
 
@@ -57,7 +66,7 @@ const refreshToken = await new Promise<string>((resolve, reject) => {
 });
 
 console.log('\n次の値をローカルの .env に保存してください。チャットやGitには貼らないでください。');
-console.log(`GOOGLE_REFRESH_TOKEN=${refreshToken}`);
+console.log(`${prefix}_REFRESH_TOKEN=${refreshToken}`);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

@@ -11,10 +11,13 @@ const config = loadConfig({
   OPERATIONS_ROLE_ID: '223456789012345678',
   GOOGLE_SPREADSHEET_ID: 'sheet',
   GOOGLE_DRIVE_FOLDER_ID: 'folder',
-  GOOGLE_AUTH_MODE: 'oauth',
-  GOOGLE_OAUTH_CLIENT_ID: 'client',
-  GOOGLE_OAUTH_CLIENT_SECRET: 'secret',
-  GOOGLE_REFRESH_TOKEN: 'refresh',
+  SHEETS_AUTH_MODE: 'service-account',
+  SHEETS_CLIENT_EMAIL: 'bot@example.com',
+  SHEETS_PRIVATE_KEY: 'private-key',
+  DRIVE_AUTH_MODE: 'oauth',
+  DRIVE_OAUTH_CLIENT_ID: 'client',
+  DRIVE_OAUTH_CLIENT_SECRET: 'secret',
+  DRIVE_REFRESH_TOKEN: 'refresh',
   ADMIN_PASSWORD: 'long-test-password',
 });
 

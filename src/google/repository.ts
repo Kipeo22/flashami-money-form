@@ -6,7 +6,7 @@ import { google } from 'googleapis';
 import type { AppConfig } from '../config.js';
 import { aggregateExpenses } from '../domain/settlement.js';
 import type { CreateEventInput, EventRecord, Expense, Person } from '../domain/types.js';
-import { createGoogleAuth } from './auth.js';
+import { createDriveAuth, createSheetsAuth } from './auth.js';
 
 const SHEETS = {
   events: 'イベント',
@@ -79,9 +79,8 @@ export class GoogleRepository {
   private readonly rootDriveFolderId: string;
 
   constructor(config: AppConfig) {
-    const auth = createGoogleAuth(config);
-    this.sheets = google.sheets({ version: 'v4', auth });
-    this.drive = google.drive({ version: 'v3', auth });
+    this.sheets = google.sheets({ version: 'v4', auth: createSheetsAuth(config) });
+    this.drive = google.drive({ version: 'v3', auth: createDriveAuth(config) });
     this.spreadsheetId = config.google.spreadsheetId;
     this.rootDriveFolderId = config.google.driveFolderId;
   }
