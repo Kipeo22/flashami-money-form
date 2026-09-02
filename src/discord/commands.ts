@@ -8,7 +8,10 @@ export const commandDefinitions = [
     .setDescription('このチャンネルに支出登録ボタンを設置します')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder()
+    .setName(COMMANDS.registerExpense)
+    .setDescription('支出登録フォームを開きます'),
+  new SlashCommandBuilder()
     .setName(COMMANDS.refresh)
     .setDescription('Google Sheetsの精算・予算集計を再計算します')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    .setDefaultMemberPermissions(0),
 ].map((command) => command.toJSON());

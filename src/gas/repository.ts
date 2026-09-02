@@ -22,6 +22,14 @@ const BUDGET_HEADERS = [
   '残額(円)',
   '更新日時',
 ] as const;
+const RETRYABLE_ACTIONS = new Set([
+  'initialize',
+  'listEvents',
+  'readExpenses',
+  'hasExpense',
+  'replaceAggregations',
+]);
+const RETRY_DELAYS_MS = [0, 250] as const;
 
 type ReceiptUpload = {
   buffer: Buffer;
@@ -36,6 +44,7 @@ export class GasRepository {
   private readonly webAppUrl: string;
   private readonly sharedSecret: string;
   private readonly fetchImplementation: typeof fetch;
+  private cachedEvents: EventRecord[] = [];
 
   constructor(config: AppConfig, fetchImplementation: typeof fetch = fetch) {
     this.webAppUrl = config.gas.webAppUrl;
@@ -50,10 +59,22 @@ export class GasRepository {
 
   async listEvents(): Promise<EventRecord[]> {
     const rows = parseRows(await this.request('listEvents', {}), 'イベント一覧');
-    return rows
+    this.cachedEvents = rows
       .filter((row) => row.some((value) => value !== ''))
       .map(rowToEvent)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.cachedEvents;
+  }
+
+  findCachedActiveEvent(discordGuildId: string, discordChannelId: string): EventRecord | null {
+    return (
+      this.cachedEvents.find(
+        (event) =>
+          event.status === 'active' &&
+          event.discordGuildId === discordGuildId &&
+          event.discordChannelId === discordChannelId,
+      ) ?? null
+    );
   }
 
   async getEvent(eventId: string): Promise<EventRecord | null> {
@@ -76,17 +97,27 @@ export class GasRepository {
 
   async createEvent(input: CreateEventInput): Promise<EventRecord> {
     try {
-      return rowToEvent(parseRow(await this.request('createEvent', input), '作成イベント'));
+      const event = rowToEvent(parseRow(await this.request('createEvent', input), '作成イベント'));
+      this.cachedEvents = [event, ...this.cachedEvents.filter(({ id }) => id !== event.id)];
+      return event;
     } catch (error) {
       if (error instanceof GasApiError && error.code === 'EVENT_CONFLICT') {
         throw new EventConflictError(error.message);
+      }
+      if (
+        error instanceof GasApiError &&
+        ['SHEET_CONFLICT', 'SPREADSHEET_ACCESS', 'VALIDATION_ERROR', 'NOT_FOUND'].includes(
+          error.code,
+        )
+      ) {
+        throw new EventConfigurationError(error.message);
       }
       throw error;
     }
   }
 
-  async hasExpense(expenseId: string): Promise<boolean> {
-    const result = await this.request('hasExpense', { expenseId });
+  async hasExpense(expenseId: string, eventId: string): Promise<boolean> {
+    const result = await this.request('hasExpense', { expenseId, eventId });
     if (typeof result !== 'boolean') throw new Error('GASから不正な支出確認結果が返されました。');
     return result;
   }
@@ -159,6 +190,21 @@ export class GasRepository {
   }
 
   private async request(action: string, payload: unknown): Promise<unknown> {
+    const attempts = RETRYABLE_ACTIONS.has(action) ? RETRY_DELAYS_MS.length + 1 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) await wait(RETRY_DELAYS_MS[attempt - 1] ?? 0);
+      try {
+        return await this.requestOnce(action, payload);
+      } catch (error) {
+        if (!(error instanceof RetryableGasTransportError) || attempt === attempts - 1) {
+          throw error;
+        }
+      }
+    }
+    throw new Error('GASへの接続に失敗しました。');
+  }
+
+  private async requestOnce(action: string, payload: unknown): Promise<unknown> {
     const signedBody = JSON.stringify({
       version: 1,
       timestamp: Math.floor(Date.now() / 1000),
@@ -169,23 +215,32 @@ export class GasRepository {
     const signature = createHmac('sha256', this.sharedSecret)
       .update(signedBody)
       .digest('base64url');
-    const response = await this.fetchImplementation(this.webAppUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body: signedBody, signature }),
-      redirect: 'follow',
-      signal: AbortSignal.timeout(120_000),
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(this.webAppUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: signedBody, signature }),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch {
+      throw new RetryableGasTransportError('GASへ接続できませんでした。');
+    }
     const responseText = await response.text();
     if (!response.ok) {
-      throw new Error(`GASへの接続に失敗しました (${response.status})。`);
+      const message = `GASへの接続に失敗しました (${response.status})。`;
+      if ([404, 408, 429].includes(response.status) || response.status >= 500) {
+        throw new RetryableGasTransportError(message);
+      }
+      throw new Error(message);
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(responseText);
     } catch {
-      throw new Error(
+      throw new RetryableGasTransportError(
         'GASからJSON以外の応答が返されました。WebアプリのURLと公開範囲を確認してください。',
       );
     }
@@ -206,6 +261,7 @@ export class GasRepository {
 }
 
 export class EventConflictError extends Error {}
+export class EventConfigurationError extends Error {}
 
 class GasApiError extends Error {
   constructor(
@@ -216,11 +272,17 @@ class GasApiError extends Error {
   }
 }
 
+class RetryableGasTransportError extends Error {}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function expenseToRow(expense: Expense): Array<string | number> {
   const targetIds =
     expense.target.type === 'members' ? expense.target.members.map(({ id }) => id) : [];
   const targetNames =
-    expense.target.type === 'members' ? expense.target.members.map(({ name }) => name) : ['運営'];
+    expense.target.type === 'members' ? expense.target.members.map(({ name }) => name) : [];
   return [
     expense.id,
     expense.createdAt,
@@ -233,7 +295,7 @@ function expenseToRow(expense: Expense): Array<string | number> {
     expense.target.type === 'operations' ? '運営' : '参加者',
     JSON.stringify(targetIds),
     JSON.stringify(targetNames),
-    targetNames.join('、'),
+    expense.target.type === 'operations' ? '運営' : targetNames.join('、'),
     expense.item,
     expense.amountYen,
     expense.receiptFileId,
@@ -245,7 +307,7 @@ function expenseToRow(expense: Expense): Array<string | number> {
 }
 
 function rowToEvent(row: unknown[]): EventRecord {
-  const status = requiredString(row[7], '状態');
+  const status = requiredString(row[8], '状態');
   if (status !== 'active' && status !== 'archived') {
     throw new Error('イベントシートの状態は active または archived にしてください。');
   }
@@ -257,8 +319,9 @@ function rowToEvent(row: unknown[]): EventRecord {
     discordChannelId: requiredString(row[4], 'DiscordチャンネルID'),
     operationsRoleId: requiredString(row[5], '運営ロールID'),
     driveFolderId: requiredString(row[6], 'DriveフォルダID'),
+    spreadsheetId: requiredString(row[7], 'イベントスプレッドシートID'),
     status,
-    createdAt: requiredString(row[8], '作成日時'),
+    createdAt: requiredString(row[9], '作成日時'),
   };
 }
 
@@ -266,10 +329,11 @@ function rowToExpense(row: unknown[]): Expense {
   const targetType = requiredString(row[8], '対象区分');
   const ids = parseStringArray(row[9], '対象者ID(JSON)');
   const names = parseStringArray(row[10], '対象者名(JSON)');
-  if (ids.length !== names.length) {
+  if (targetType === '参加者' && ids.length !== names.length) {
     throw new Error('支出シートの対象者IDと名前の数が一致しません。');
   }
-  const members: Person[] = ids.map((id, index) => ({ id, name: names[index] ?? id }));
+  const members: Person[] =
+    targetType === '運営' ? [] : ids.map((id, index) => ({ id, name: names[index] ?? id }));
   if (targetType !== '運営' && targetType !== '参加者') {
     throw new Error('支出シートの対象区分は「運営」または「参加者」にしてください。');
   }
@@ -297,9 +361,9 @@ function rowToExpense(row: unknown[]): Expense {
     target: targetType === '運営' ? { type: 'operations' } : { type: 'members', members },
     item: requiredString(row[12], '内容'),
     amountYen: parseNonNegativeInteger(row[13], '金額'),
-    receiptFileId: requiredString(row[14], 'レシートファイルID'),
-    receiptUrl: requiredString(row[15], 'レシートURL'),
-    receiptName: requiredString(row[16], 'レシート名'),
+    receiptFileId: optionalString(row[14]),
+    receiptUrl: optionalString(row[15]),
+    receiptName: optionalString(row[16]),
   };
 }
 
@@ -331,6 +395,10 @@ function requiredString(value: unknown, label: string): string {
   const text = String(value ?? '').trim();
   if (!text) throw new Error(`${label}が空です。`);
   return text;
+}
+
+function optionalString(value: unknown): string {
+  return String(value ?? '').trim();
 }
 
 function parseNonNegativeInteger(value: unknown, label: string): number {

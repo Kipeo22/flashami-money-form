@@ -22,6 +22,8 @@ describe('event management web screen', () => {
         initialBudgetYen: '100,000',
         discordChannelId: '323456789012345678',
         operationsRoleId: '223456789012345678',
+        spreadsheet:
+          'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
       }),
       config,
     );
@@ -32,6 +34,7 @@ describe('event management web screen', () => {
       discordGuildId: '123456789012345678',
       discordChannelId: '323456789012345678',
       operationsRoleId: '223456789012345678',
+      spreadsheetId: '1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890',
     });
   });
 
@@ -46,6 +49,7 @@ describe('event management web screen', () => {
       discordChannelId: '323456789012345678',
       operationsRoleId: '223456789012345678',
       driveFolderId: 'drive-folder',
+      spreadsheetId: 'event-spreadsheet',
       status: 'active',
       createdAt: '2026-08-29T00:00:00.000Z',
     };
@@ -53,5 +57,6 @@ describe('event management web screen', () => {
     expect(html).toContain('夏合宿 2026');
     expect(html).toContain('¥100,000');
     expect(html).toContain('323456789012345678');
+    expect(html).toContain('event-spreadsheet');
   });
 });

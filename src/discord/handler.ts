@@ -1,6 +1,14 @@
 import { Events, MessageFlags } from 'discord.js';
-import type { Attachment, BaseInteraction, Client, ModalSubmitInteraction, User } from 'discord.js';
+import type {
+  Attachment,
+  BaseInteraction,
+  ChatInputCommandInteraction,
+  Client,
+  ModalSubmitInteraction,
+  User,
+} from 'discord.js';
 import type { Logger } from 'pino';
+import sharp from 'sharp';
 
 import { parseAmountYen } from '../domain/amount.js';
 import { classifyTargets, TargetSelectionError } from '../domain/target.js';
@@ -9,7 +17,8 @@ import type { GasRepository } from '../gas/repository.js';
 import { buildExpenseButtonRow, buildExpenseModal } from './components.js';
 import { COMMANDS, COMPONENTS, eventIdFromComponent } from './ids.js';
 
-const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const MAX_RECEIPT_BYTES = 20 * 1000 * 1000;
+const MAX_GAS_BINARY_BYTES = 8 * 1024 * 1024;
 const allowedReceiptExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.pdf']);
 
 export function registerInteractionHandler(
@@ -18,20 +27,35 @@ export function registerInteractionHandler(
   logger: Logger,
 ): void {
   const queue = new SerialQueue();
+  const eventNames = new Map<string, string>();
 
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
       if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === COMMANDS.registerExpense) {
+          const guildId = requiredContext(interaction.guildId, 'Discordサーバー');
+          const channelId = requiredContext(interaction.channelId, 'Discordチャンネル');
+          const event = repository.findCachedActiveEvent(guildId, channelId);
+          if (!event) {
+            throw new UserInputError('このチャンネルに有効なイベントがありません。');
+          }
+          eventNames.set(event.id, event.name);
+          await interaction.showModal(buildExpenseModal(event.id, event.name));
+          return;
+        }
+
         if (interaction.commandName === COMMANDS.postForm) {
           const guildId = requiredContext(interaction.guildId, 'Discordサーバー');
           const channelId = requiredContext(interaction.channelId, 'Discordチャンネル');
+          await interaction.deferReply();
           const event = await repository.findActiveEvent(guildId, channelId);
           if (!event) {
             throw new UserInputError(
               'このチャンネルに有効なイベントがありません。先にWeb管理画面でイベントを作成してください。',
             );
           }
-          await interaction.reply({
+          eventNames.set(event.id, event.name);
+          await interaction.editReply({
             content: [
               `### ${event.name}の支出登録`,
               'ボタンから支払者・対象者・内容・金額・レシートを入力してください。',
@@ -44,7 +68,16 @@ export function registerInteractionHandler(
         }
 
         if (interaction.commandName === COMMANDS.refresh) {
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          await interaction.deferReply();
+          const guildId = requiredContext(interaction.guildId, 'Discordサーバー');
+          const channelId = requiredContext(interaction.channelId, 'Discordチャンネル');
+          const event = await repository.findActiveEvent(guildId, channelId);
+          if (!event) {
+            throw new UserInputError('このチャンネルに有効なイベントがありません。');
+          }
+          if (!memberHasRole(interaction, event.operationsRoleId)) {
+            throw new UserInputError('運営ロールのメンバーだけが集計を更新できます。');
+          }
           await queue.run(() => repository.refreshAggregations());
           await interaction.editReply('精算表と予算集計を更新しました。');
           return;
@@ -57,11 +90,9 @@ export function registerInteractionHandler(
           COMPONENTS.openExpenseModalPrefix,
         );
         if (!eventId) return;
-        const event = await repository.getEvent(eventId);
-        if (!event || event.status !== 'active') {
-          throw new UserInputError('このイベントは現在利用できません。');
-        }
-        await interaction.showModal(buildExpenseModal(event.id, event.name));
+        await interaction.showModal(
+          buildExpenseModal(eventId, eventNames.get(eventId) ?? 'イベント'),
+        );
         return;
       }
 
@@ -84,7 +115,7 @@ async function handleExpenseModal(
   logger: Logger,
   queue: SerialQueue,
 ): Promise<void> {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.deferReply();
 
   const event = await repository.getEvent(eventId);
   if (!event || event.status !== 'active') {
@@ -94,32 +125,37 @@ async function handleExpenseModal(
     throw new UserInputError('このイベントが設定されたDiscordサーバーから登録してください。');
   }
 
-  const payer = firstUser(interaction.fields.getSelectedUsers(COMPONENTS.payer, true));
+  const payerUser = firstUser(interaction.fields.getSelectedUsers(COMPONENTS.payer, true));
+  const selectedPayerMembers = interaction.fields.getSelectedMembers(COMPONENTS.payer);
   const selectedTargets = interaction.fields.getSelectedMentionables(COMPONENTS.targets, true);
+  const selectedTargetMembers = interaction.fields.getSelectedMembers(COMPONENTS.targets);
   const target = parseTargets(
-    [...selectedTargets.users.values()].map(toPerson),
+    [...selectedTargets.users.values()].map((user) =>
+      toPerson(user, selectedTargetMembers?.get(user.id)),
+    ),
     [...selectedTargets.roles.keys()],
     event.operationsRoleId,
   );
   const item = interaction.fields.getTextInputValue(COMPONENTS.item).trim();
   if (!item) throw new UserInputError('「なにを？」を入力してください。');
   const amountYen = parseAmountForUser(interaction.fields.getTextInputValue(COMPONENTS.amount));
-  const receipt = firstAttachment(interaction.fields.getUploadedFiles(COMPONENTS.receipt, true));
-  validateReceipt(receipt);
-  const receiptBuffer = await downloadReceipt(receipt);
+  const receipt = interaction.fields.getUploadedFiles(COMPONENTS.receipt)?.first() ?? null;
+  if (receipt) validateReceipt(receipt);
+  const preparedReceipt = receipt ? await downloadReceipt(receipt) : null;
 
   const result = await queue.run(async () => {
-    if (await repository.hasExpense(interaction.id)) return { duplicate: true } as const;
+    if (await repository.hasExpense(interaction.id, event.id)) return { duplicate: true } as const;
 
-    const filename = buildReceiptFilename(interaction.id, receipt.name);
-    const uploaded = await repository.uploadReceipt(
-      {
-        buffer: receiptBuffer,
-        filename,
-        mimeType: receipt.contentType ?? inferMimeType(receipt.name),
-      },
-      event.driveFolderId,
-    );
+    const uploaded = preparedReceipt
+      ? await repository.uploadReceipt(
+          {
+            buffer: preparedReceipt.buffer,
+            filename: buildReceiptFilename(interaction.id, preparedReceipt.name),
+            mimeType: preparedReceipt.mimeType,
+          },
+          event.driveFolderId,
+        )
+      : null;
 
     const expense: Expense = {
       id: interaction.id,
@@ -127,32 +163,33 @@ async function handleExpenseModal(
       createdAt: new Date(interaction.createdTimestamp).toISOString(),
       guildId: requiredContext(interaction.guildId, 'Discordサーバー'),
       channelId: requiredContext(interaction.channelId, 'Discordチャンネル'),
-      submittedBy: toPerson(interaction.user),
-      payer: toPerson(payer),
+      submittedBy: toPerson(interaction.user, interaction.member),
+      payer: toPerson(payerUser, selectedPayerMembers?.get(payerUser.id)),
       target,
       item,
       amountYen,
-      receiptFileId: uploaded.id,
-      receiptUrl: uploaded.url,
-      receiptName: receipt.name,
+      receiptFileId: uploaded?.id ?? '',
+      receiptUrl: uploaded?.url ?? '',
+      receiptName: preparedReceipt?.name ?? '',
     };
 
     try {
       await repository.appendExpense(expense);
     } catch (error) {
-      await repository.deleteDriveItem(uploaded.id).catch((cleanupError: unknown) => {
-        logger.error({ err: cleanupError, fileId: uploaded.id }, 'receipt rollback failed');
-      });
+      if (uploaded) {
+        await repository.deleteDriveItem(uploaded.id).catch((cleanupError: unknown) => {
+          logger.error({ err: cleanupError, fileId: uploaded.id }, 'receipt rollback failed');
+        });
+      }
       throw error;
     }
 
     try {
       await repository.refreshAggregations();
-      return { duplicate: false, aggregationUpdated: true, expense } as const;
     } catch (error) {
       logger.error({ err: error, expenseId: expense.id }, 'aggregation refresh failed');
-      return { duplicate: false, aggregationUpdated: false, expense } as const;
     }
+    return { duplicate: false, expense } as const;
   });
 
   if (result.duplicate) {
@@ -166,17 +203,27 @@ async function handleExpenseModal(
       : result.expense.target.members.map(({ name }) => name).join('、');
   const lines = [
     `「${result.expense.event.name}」に支出を登録しました。`,
-    `支払者: ${result.expense.payer.name}`,
-    `対象者: ${targetText}`,
-    `内容: ${result.expense.item}`,
-    `金額: ${result.expense.amountYen.toLocaleString('ja-JP')}円`,
+    `誰が？ ${result.expense.payer.name}`,
+    `誰の？ ${targetText}`,
+    `何を？ ${result.expense.item}`,
+    `いくら？ ${result.expense.amountYen.toLocaleString('ja-JP')}円`,
+    `レシート: ${receipt ? '添付あり' : 'なし'}`,
   ];
-  if (!result.aggregationUpdated) {
-    lines.push(
-      '⚠️ 支出は保存済みですが集計更新に失敗しました。管理者が `/集計更新` を実行してください。',
-    );
+  const content = lines.join('\n');
+  if (preparedReceipt) {
+    await interaction.editReply({
+      content,
+      files: [{ attachment: preparedReceipt.buffer, name: preparedReceipt.name }],
+    });
+  } else {
+    await interaction.editReply({ content });
   }
-  await interaction.editReply(lines.join('\n'));
+}
+
+function memberHasRole(interaction: ChatInputCommandInteraction, roleId: string): boolean {
+  const roles = interaction.member?.roles;
+  if (!roles) return false;
+  return Array.isArray(roles) ? roles.includes(roleId) : roles.cache.has(roleId);
 }
 
 function parseTargets(users: Person[], roleIds: string[], operationsRoleId: string) {
@@ -199,7 +246,9 @@ function parseAmountForUser(raw: string): number {
 
 function validateReceipt(receipt: Attachment): void {
   if (receipt.size > MAX_RECEIPT_BYTES) {
-    throw new UserInputError('レシートは10 MiB以下にしてください。');
+    throw new UserInputError(
+      `レシートは20 MB以下にしてください（Discord検出: ${formatMiB(receipt.size)} MiB）。`,
+    );
   }
   const extension = receipt.name.slice(receipt.name.lastIndexOf('.')).toLowerCase();
   const validMime =
@@ -209,14 +258,57 @@ function validateReceipt(receipt: Attachment): void {
   }
 }
 
-async function downloadReceipt(receipt: Attachment): Promise<Buffer> {
+async function downloadReceipt(
+  receipt: Attachment,
+): Promise<{ buffer: Buffer; name: string; mimeType: string }> {
   const response = await fetch(receipt.url, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok)
     throw new Error(`Discordからレシートを取得できませんでした (${response.status})。`);
   const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength > MAX_RECEIPT_BYTES)
-    throw new UserInputError('レシートは10 MiB以下にしてください。');
-  return buffer;
+  if (buffer.byteLength > MAX_RECEIPT_BYTES) {
+    throw new UserInputError(
+      `レシートは20 MB以下にしてください（取得後: ${formatMiB(buffer.byteLength)} MiB）。`,
+    );
+  }
+  const mimeType = receipt.contentType ?? inferMimeType(receipt.name);
+  if (!mimeType.startsWith('image/')) {
+    if (buffer.byteLength > MAX_GAS_BINARY_BYTES) {
+      throw new UserInputError(
+        `PDFレシートは8 MiB以下にしてください（取得後: ${formatMiB(buffer.byteLength)} MiB）。`,
+      );
+    }
+    return { buffer, name: receipt.name, mimeType };
+  }
+  if (buffer.byteLength <= MAX_GAS_BINARY_BYTES) {
+    return { buffer, name: receipt.name, mimeType };
+  }
+
+  let optimized: Buffer;
+  try {
+    optimized = await sharp(buffer)
+      .rotate()
+      .resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82, mozjpeg: true })
+      .toBuffer();
+  } catch {
+    throw new UserInputError(
+      'レシート画像を最適化できませんでした。別の画像形式で再試行してください。',
+    );
+  }
+  if (optimized.byteLength > MAX_GAS_BINARY_BYTES) {
+    throw new UserInputError(
+      `画像最適化後も容量が大きすぎます（${formatMiB(optimized.byteLength)} MiB）。`,
+    );
+  }
+  return {
+    buffer: optimized,
+    name: `${receipt.name.replace(/\.[^.]+$/, '') || 'receipt'}.jpg`,
+    mimeType: 'image/jpeg',
+  };
+}
+
+function formatMiB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(2);
 }
 
 function buildReceiptFilename(interactionId: string, originalName: string): string {
@@ -247,13 +339,15 @@ function firstUser(users: ReadonlyMap<string, User>): User {
   return user;
 }
 
-function firstAttachment(files: ReadonlyMap<string, Attachment>): Attachment {
-  const attachment = files.values().next().value;
-  if (!attachment) throw new UserInputError('レシートを添付してください。');
-  return attachment;
-}
-
-function toPerson(user: User): Person {
+function toPerson(user: User, member?: unknown): Person {
+  if (member && typeof member === 'object') {
+    if ('displayName' in member && typeof member.displayName === 'string') {
+      return { id: user.id, name: member.displayName };
+    }
+    if ('nick' in member && typeof member.nick === 'string') {
+      return { id: user.id, name: member.nick };
+    }
+  }
   return { id: user.id, name: user.globalName ?? user.username };
 }
 
@@ -267,7 +361,7 @@ async function respondWithError(interaction: BaseInteraction, error: unknown): P
   const message =
     error instanceof UserInputError
       ? error.message
-      : '処理に失敗しました。時間を置いて再試行し、続く場合は管理者へ連絡してください。';
+      : 'ふらしゃみくんパンクしちゃうしゃみ〜！エラーが続く場合は運営に連絡するしゃみ〜';
   const options = { content: `⚠️ ${message}`, flags: MessageFlags.Ephemeral } as const;
   if (interaction.deferred || interaction.replied) {
     await interaction.editReply({ content: options.content }).catch(() => undefined);

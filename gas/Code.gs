@@ -1,8 +1,6 @@
 const SHEETS = Object.freeze({
   events: 'イベント',
   expenses: '支出',
-  settlements: '精算',
-  budget: '予算集計',
 });
 
 const LEGACY_EXPENSE_HEADERS = [
@@ -25,6 +23,17 @@ const LEGACY_EXPENSE_HEADERS = [
   'レシート名',
 ];
 const EXPENSE_HEADERS = LEGACY_EXPENSE_HEADERS.concat(['イベントID', 'イベント名']);
+const LEGACY_EVENT_HEADERS = [
+  'イベントID',
+  'イベント名',
+  '初期予算(円)',
+  'DiscordサーバーID',
+  'DiscordチャンネルID',
+  '運営ロールID',
+  'DriveフォルダID',
+  '状態',
+  '作成日時',
+];
 const EVENT_HEADERS = [
   'イベントID',
   'イベント名',
@@ -33,6 +42,7 @@ const EVENT_HEADERS = [
   'DiscordチャンネルID',
   '運営ロールID',
   'DriveフォルダID',
+  'イベントスプレッドシートID',
   '状態',
   '作成日時',
 ];
@@ -56,7 +66,11 @@ const BUDGET_HEADERS = [
 ];
 
 const MAX_CLOCK_SKEW_SECONDS = 300;
-const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const MAX_RECEIPT_BYTES = 20 * 1000 * 1000;
+const EVENT_SHEET_NAME = '収支・精算';
+const EXPENSE_HEADER_ROW = 8;
+const EXPENSE_FIRST_ROW = 9;
+const SETTLEMENT_FIRST_COLUMN = 21;
 
 // GASエディタから最初に1回実行し、権限承認とシート初期化を行います。
 function setup() {
@@ -147,7 +161,10 @@ function dispatch_(action, payload) {
     case 'createEvent':
       return createEvent_(requiredObject_(payload, 'イベント'));
     case 'hasExpense':
-      return hasExpense_(requiredString_(payload && payload.expenseId, '支出ID'));
+      return hasExpense_(
+        requiredString_(payload && payload.expenseId, '支出ID'),
+        requiredString_(payload && payload.eventId, 'イベントID'),
+      );
     case 'uploadReceipt':
       return uploadReceipt_(requiredObject_(payload, 'レシート'));
     case 'deleteDriveItem':
@@ -155,7 +172,7 @@ function dispatch_(action, payload) {
     case 'appendExpense':
       return appendExpense_(payload && payload.row);
     case 'readExpenses':
-      return readRows_(SHEETS.expenses, EXPENSE_HEADERS.length);
+      return readAllEventExpenses_();
     case 'replaceAggregations':
       return replaceAggregations_(requiredObject_(payload, '集計'));
     default:
@@ -165,14 +182,9 @@ function dispatch_(action, payload) {
 
 function initialize_() {
   const spreadsheet = getSpreadsheet_();
-  Object.keys(SHEETS).forEach((key) => {
-    const name = SHEETS[key];
-    if (!spreadsheet.getSheetByName(name)) spreadsheet.insertSheet(name);
-  });
-  ensureHeader_(SHEETS.events, EVENT_HEADERS, false);
-  ensureExpenseHeader_();
-  ensureHeader_(SHEETS.settlements, SETTLEMENT_HEADERS, true);
-  ensureHeader_(SHEETS.budget, BUDGET_HEADERS, true);
+  if (!spreadsheet.getSheetByName(SHEETS.events)) spreadsheet.insertSheet(SHEETS.events);
+  ensureEventHeader_();
+  migrateLegacyEvents_();
   SpreadsheetApp.flush();
   return null;
 }
@@ -184,9 +196,10 @@ function createEvent_(input) {
   const discordGuildId = requiredSnowflake_(input.discordGuildId, 'DiscordサーバーID');
   const discordChannelId = requiredSnowflake_(input.discordChannelId, 'DiscordチャンネルID');
   const operationsRoleId = requiredSnowflake_(input.operationsRoleId, '運営ロールID');
+  const spreadsheetId = requiredSpreadsheetId_(input.spreadsheetId);
   const duplicate = readRows_(SHEETS.events, EVENT_HEADERS.length).find(
     (row) =>
-      row[7] === 'active' &&
+      row[8] === 'active' &&
       String(row[3]) === discordGuildId &&
       String(row[4]) === discordChannelId,
   );
@@ -202,18 +215,24 @@ function createEvent_(input) {
   const folder = DriveApp.getFolderById(rootFolderId).createFolder(
     `${name} (${eventId.slice(0, 8)})`.slice(0, 200),
   );
-  const row = [
-    eventId,
-    name,
-    initialBudgetYen,
-    discordGuildId,
-    discordChannelId,
-    operationsRoleId,
-    folder.getId(),
-    'active',
-    new Date().toISOString(),
-  ];
   try {
+    const eventSpreadsheet = prepareEventSpreadsheet_(
+      spreadsheetId,
+      { id: eventId, name, initialBudgetYen },
+      [],
+    );
+    const row = [
+      eventId,
+      name,
+      initialBudgetYen,
+      discordGuildId,
+      discordChannelId,
+      operationsRoleId,
+      folder.getId(),
+      eventSpreadsheet.getId(),
+      'active',
+      new Date().toISOString(),
+    ];
     appendRow_(SHEETS.events, row);
     return row;
   } catch (error) {
@@ -222,8 +241,9 @@ function createEvent_(input) {
   }
 }
 
-function hasExpense_(expenseId) {
-  return readRows_(SHEETS.expenses, 1).some((row) => String(row[0]) === expenseId);
+function hasExpense_(expenseId, eventId) {
+  const eventRow = findEventRow_(eventId);
+  return readEventExpenses_(eventRow).some((row) => String(row[0]) === expenseId);
 }
 
 function uploadReceipt_(payload) {
@@ -243,7 +263,10 @@ function uploadReceipt_(payload) {
     throw new ApiError('VALIDATION_ERROR', 'レシートデータが不正です。');
   }
   if (bytes.length > MAX_RECEIPT_BYTES) {
-    throw new ApiError('VALIDATION_ERROR', 'レシートは10 MiB以下にしてください。');
+    throw new ApiError(
+      'VALIDATION_ERROR',
+      `レシートは20 MB以下にしてください（GAS検出: ${(bytes.length / (1024 * 1024)).toFixed(2)} MiB）。`,
+    );
   }
   const blob = Utilities.newBlob(bytes, mimeType, filename);
   const file = DriveApp.getFolderById(eventFolderId).createFile(blob);
@@ -260,9 +283,12 @@ function appendExpense_(row) {
     throw new ApiError('VALIDATION_ERROR', '支出データの列数が不正です。');
   }
   const expenseId = requiredString_(row[0], '支出ID');
-  if (hasExpense_(expenseId)) throw new ApiError('EXPENSE_CONFLICT', 'この支出は登録済みです。');
+  const eventId = requiredString_(row[17], 'イベントID');
+  if (hasExpense_(expenseId, eventId)) {
+    throw new ApiError('EXPENSE_CONFLICT', 'この支出は登録済みです。');
+  }
   requiredNonNegativeInteger_(row[13], '金額');
-  appendRow_(SHEETS.expenses, row);
+  appendEventExpense_(findEventRow_(eventId), row);
   return null;
 }
 
@@ -275,8 +301,23 @@ function replaceAggregations_(payload) {
   if (JSON.stringify(budgetRows[0]) !== JSON.stringify(BUDGET_HEADERS)) {
     throw new ApiError('VALIDATION_ERROR', '予算集計ヘッダーが不正です。');
   }
-  replaceSheetValues_(SHEETS.settlements, settlementRows);
-  replaceSheetValues_(SHEETS.budget, budgetRows);
+  const settlementsByEvent = {};
+  settlementRows.slice(1).forEach((row) => {
+    const eventId = requiredString_(row[0], '精算イベントID');
+    if (!settlementsByEvent[eventId]) settlementsByEvent[eventId] = [];
+    settlementsByEvent[eventId].push(row);
+  });
+  const budgetsByEvent = {};
+  budgetRows.slice(1).forEach((row) => {
+    budgetsByEvent[requiredString_(row[0], '予算イベントID')] = row;
+  });
+  readRows_(SHEETS.events, EVENT_HEADERS.length).forEach((eventRow) => {
+    updateEventAggregation_(
+      eventRow,
+      settlementsByEvent[String(eventRow[0])] || [],
+      budgetsByEvent[String(eventRow[0])],
+    );
+  });
   SpreadsheetApp.flush();
   return null;
 }
@@ -304,34 +345,25 @@ function appendRow_(sheetName, row) {
   SpreadsheetApp.flush();
 }
 
-function ensureExpenseHeader_() {
-  const sheet = getSheet_(SHEETS.expenses);
+function ensureEventHeader_() {
+  const sheet = getSheet_(SHEETS.events);
   const current = trimTrailingBlanks_(
-    sheet.getRange(1, 1, 1, EXPENSE_HEADERS.length).getDisplayValues()[0],
+    sheet.getRange(1, 1, 1, EVENT_HEADERS.length).getDisplayValues()[0],
   );
-  if (current.length === 0 || JSON.stringify(current) === JSON.stringify(LEGACY_EXPENSE_HEADERS)) {
-    writeHeader_(sheet, EXPENSE_HEADERS);
+  if (current.length === 0) {
+    writeHeader_(sheet, EVENT_HEADERS);
     return;
   }
-  if (JSON.stringify(current) !== JSON.stringify(EXPENSE_HEADERS)) {
+  if (JSON.stringify(current) === JSON.stringify(LEGACY_EVENT_HEADERS)) {
+    sheet.insertColumnAfter(7);
+    writeHeader_(sheet, EVENT_HEADERS);
+    return;
+  }
+  if (JSON.stringify(current) !== JSON.stringify(EVENT_HEADERS)) {
     throw new ApiError(
       'HEADER_MISMATCH',
-      `${SHEETS.expenses}シートの1行目が想定ヘッダーと異なります。`,
+      `${SHEETS.events}シートの1行目が想定ヘッダーと異なります。`,
     );
-  }
-}
-
-function ensureHeader_(sheetName, expected, replaceExisting) {
-  const sheet = getSheet_(sheetName);
-  const current = trimTrailingBlanks_(
-    sheet.getRange(1, 1, 1, expected.length).getDisplayValues()[0],
-  );
-  if (current.length === 0 || replaceExisting) {
-    writeHeader_(sheet, expected);
-    return;
-  }
-  if (JSON.stringify(current) !== JSON.stringify(expected)) {
-    throw new ApiError('HEADER_MISMATCH', `${sheetName}シートの1行目が想定ヘッダーと異なります。`);
   }
 }
 
@@ -339,10 +371,235 @@ function writeHeader_(sheet, values) {
   sheet.getRange(1, 1, 1, values.length).setValues([values]);
 }
 
-function replaceSheetValues_(sheetName, values) {
-  const sheet = getSheet_(sheetName);
-  sheet.clearContents();
-  if (values.length > 0) sheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+function migrateLegacyEvents_() {
+  const legacyExpenses = readLegacyExpenseRows_();
+  const events = readRows_(SHEETS.events, EVENT_HEADERS.length);
+  events.forEach((eventRow) => {
+    const eventId = requiredString_(eventRow[0], 'イベントID');
+    const spreadsheetId = String(eventRow[7] || '').trim();
+    if (!spreadsheetId) {
+      throw new ApiError(
+        'MIGRATION_REQUIRED',
+        `「${eventRow[1]}」の既存スプレッドシートIDを、イベントシートの「イベントスプレッドシートID」列へ入力してください。`,
+      );
+    }
+    prepareEventSpreadsheet_(
+      requiredSpreadsheetId_(spreadsheetId),
+      {
+        id: eventId,
+        name: requiredString_(eventRow[1], 'イベント名'),
+        initialBudgetYen: requiredNonNegativeInteger_(eventRow[2], '初期予算'),
+      },
+      legacyExpenses.filter((expenseRow) => String(expenseRow[17]) === eventId),
+    );
+  });
+}
+
+function readLegacyExpenseRows_() {
+  const sheet = getSpreadsheet_().getSheetByName(SHEETS.expenses);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, EXPENSE_HEADERS.length)
+    .getValues()
+    .filter((row) => row.some((value) => value !== ''));
+}
+
+function prepareEventSpreadsheet_(spreadsheetId, event, expenseRows) {
+  let spreadsheet;
+  try {
+    spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  } catch (_error) {
+    throw new ApiError(
+      'SPREADSHEET_ACCESS',
+      '指定したイベントスプレッドシートを開けません。IDとGAS所有者の編集権限を確認してください。',
+    );
+  }
+  let sheet = spreadsheet.getSheetByName(EVENT_SHEET_NAME);
+  const isNewSheet = !sheet;
+  if (!sheet) sheet = spreadsheet.insertSheet(EVENT_SHEET_NAME);
+  const shouldInitialize = isNewSheet || sheet.getLastRow() === 0;
+  ensureSheetSize_(sheet, Math.max(1000, EXPENSE_FIRST_ROW + expenseRows.length), 28);
+  if (!shouldInitialize && !isManagedEventSheet_(sheet)) {
+    throw new ApiError(
+      'SHEET_CONFLICT',
+      `既存の「${EVENT_SHEET_NAME}」タブはBotの想定形式ではありません。名前を変更してから再試行してください。`,
+    );
+  }
+  if (shouldInitialize) {
+    sheet.getRange(1, 1, 5, 2).setValues([
+      ['イベント名', event.name],
+      ['初期予算(円)', event.initialBudgetYen],
+      ['共通予算使用額(円)', 0],
+      ['共通予算残額(円)', event.initialBudgetYen],
+      ['更新日時', new Date().toISOString()],
+    ]);
+    sheet.getRange(7, 1, 1, EXPENSE_HEADERS.length).merge().setValue('収支記録');
+    sheet
+      .getRange(7, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+      .merge()
+      .setValue('精算結果');
+    sheet.getRange(EXPENSE_HEADER_ROW, 1, 1, EXPENSE_HEADERS.length).setValues([EXPENSE_HEADERS]);
+    sheet
+      .getRange(EXPENSE_HEADER_ROW, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+      .setValues([SETTLEMENT_HEADERS]);
+    formatEventSheet_(sheet);
+  }
+  sheet.getRange(1, 2).setValue(event.name);
+  sheet.getRange(2, 2).setValue(event.initialBudgetYen);
+  appendMissingLegacyExpenses_(sheet, expenseRows);
+  SpreadsheetApp.flush();
+  return spreadsheet;
+}
+
+function isManagedEventSheet_(sheet) {
+  if (sheet.getLastRow() === 0) return true;
+  const expenseHeaders = sheet
+    .getRange(EXPENSE_HEADER_ROW, 1, 1, EXPENSE_HEADERS.length)
+    .getDisplayValues()[0];
+  const settlementHeaders = sheet
+    .getRange(EXPENSE_HEADER_ROW, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+    .getDisplayValues()[0];
+  return (
+    JSON.stringify(expenseHeaders) === JSON.stringify(EXPENSE_HEADERS) &&
+    JSON.stringify(settlementHeaders) === JSON.stringify(SETTLEMENT_HEADERS)
+  );
+}
+
+function appendMissingLegacyExpenses_(sheet, expenseRows) {
+  if (expenseRows.length === 0) return;
+  const existingIds = new Set(
+    readExpenseRowsFromSheet_(sheet).map((row) => requiredString_(row[0], '支出ID')),
+  );
+  const missingRows = expenseRows.filter((row) => !existingIds.has(String(row[0])));
+  missingRows.forEach((row) => appendExpenseRowToSheet_(sheet, row));
+}
+
+function formatEventSheet_(sheet) {
+  sheet.setFrozenRows(EXPENSE_HEADER_ROW);
+  sheet.getRange(1, 1, 5, 1).setFontWeight('bold');
+  sheet.getRange(2, 2, 3, 1).setNumberFormat('#,##0');
+  sheet.getRange(7, 1, 1, EXPENSE_HEADERS.length).setFontWeight('bold').setBackground('#dfe9df');
+  sheet
+    .getRange(7, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+    .setFontWeight('bold')
+    .setBackground('#dfe9df');
+  sheet
+    .getRange(EXPENSE_HEADER_ROW, 1, 1, EXPENSE_HEADERS.length)
+    .setFontWeight('bold')
+    .setBackground('#263a2c')
+    .setFontColor('#ffffff');
+  sheet
+    .getRange(EXPENSE_HEADER_ROW, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+    .setFontWeight('bold')
+    .setBackground('#263a2c')
+    .setFontColor('#ffffff');
+  sheet.autoResizeColumns(1, EXPENSE_HEADERS.length);
+  sheet.autoResizeColumns(SETTLEMENT_FIRST_COLUMN, SETTLEMENT_HEADERS.length);
+}
+
+function findEventRow_(eventId) {
+  const eventRow = readRows_(SHEETS.events, EVENT_HEADERS.length).find(
+    (row) => String(row[0]) === eventId,
+  );
+  if (!eventRow) throw new ApiError('NOT_FOUND', 'イベントが見つかりません。');
+  requiredString_(eventRow[7], 'イベントスプレッドシートID');
+  return eventRow;
+}
+
+function getEventSheet_(eventRow) {
+  const spreadsheet = SpreadsheetApp.openById(
+    requiredString_(eventRow[7], 'イベントスプレッドシートID'),
+  );
+  const sheet = spreadsheet.getSheetByName(EVENT_SHEET_NAME);
+  if (!sheet) throw new ApiError('CONFIG_ERROR', `${EVENT_SHEET_NAME}シートがありません。`);
+  return sheet;
+}
+
+function readEventExpenses_(eventRow) {
+  return readExpenseRowsFromSheet_(getEventSheet_(eventRow));
+}
+
+function readExpenseRowsFromSheet_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < EXPENSE_FIRST_ROW) return [];
+  return sheet
+    .getRange(EXPENSE_FIRST_ROW, 1, lastRow - EXPENSE_FIRST_ROW + 1, EXPENSE_HEADERS.length)
+    .getValues()
+    .filter((row) => String(row[0] || '').trim());
+}
+
+function readAllEventExpenses_() {
+  const rows = [];
+  readRows_(SHEETS.events, EVENT_HEADERS.length).forEach((eventRow) => {
+    rows.push.apply(rows, readEventExpenses_(eventRow));
+  });
+  return rows;
+}
+
+function appendEventExpense_(eventRow, row) {
+  appendExpenseRowToSheet_(getEventSheet_(eventRow), row);
+  SpreadsheetApp.flush();
+}
+
+function appendExpenseRowToSheet_(sheet, row) {
+  const candidateCount = Math.max(sheet.getLastRow() - EXPENSE_FIRST_ROW + 1, 1);
+  const firstColumn = sheet.getRange(EXPENSE_FIRST_ROW, 1, candidateCount, 1).getValues();
+  let nextRow = EXPENSE_FIRST_ROW;
+  for (let index = firstColumn.length - 1; index >= 0; index -= 1) {
+    if (String(firstColumn[index][0] || '').trim()) {
+      nextRow = EXPENSE_FIRST_ROW + index + 1;
+      break;
+    }
+  }
+  ensureSheetSize_(sheet, nextRow, EXPENSE_HEADERS.length);
+  sheet.getRange(nextRow, 1, 1, EXPENSE_HEADERS.length).setValues([row]);
+}
+
+function updateEventAggregation_(eventRow, settlementRows, budgetRow) {
+  const sheet = getEventSheet_(eventRow);
+  const initialBudgetYen = requiredNonNegativeInteger_(eventRow[2], '初期予算');
+  const spentYen = budgetRow ? requiredNonNegativeInteger_(budgetRow[3], '使用額') : 0;
+  const remainingYen = budgetRow ? Number(budgetRow[4]) : initialBudgetYen - spentYen;
+  const updatedAt = budgetRow
+    ? requiredString_(budgetRow[5], '更新日時')
+    : new Date().toISOString();
+  sheet
+    .getRange(1, 2, 5, 1)
+    .setValues([
+      [requiredString_(eventRow[1], 'イベント名')],
+      [initialBudgetYen],
+      [spentYen],
+      [remainingYen],
+      [updatedAt],
+    ]);
+  const clearRows = Math.max(sheet.getMaxRows() - EXPENSE_HEADER_ROW + 1, 1);
+  sheet
+    .getRange(EXPENSE_HEADER_ROW, SETTLEMENT_FIRST_COLUMN, clearRows, SETTLEMENT_HEADERS.length)
+    .clearContent();
+  ensureSheetSize_(sheet, EXPENSE_HEADER_ROW + settlementRows.length, 28);
+  sheet
+    .getRange(EXPENSE_HEADER_ROW, SETTLEMENT_FIRST_COLUMN, 1, SETTLEMENT_HEADERS.length)
+    .setValues([SETTLEMENT_HEADERS]);
+  if (settlementRows.length > 0) {
+    sheet
+      .getRange(
+        EXPENSE_FIRST_ROW,
+        SETTLEMENT_FIRST_COLUMN,
+        settlementRows.length,
+        SETTLEMENT_HEADERS.length,
+      )
+      .setValues(settlementRows);
+  }
+  sheet.getRange(2, 2, 3, 1).setNumberFormat('#,##0');
+}
+
+function ensureSheetSize_(sheet, requiredRows, requiredColumns) {
+  if (sheet.getMaxRows() < requiredRows) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+  }
+  if (sheet.getMaxColumns() < requiredColumns) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), requiredColumns - sheet.getMaxColumns());
+  }
 }
 
 function requiredProperty_(name) {
@@ -378,6 +635,14 @@ function requiredString_(value, label) {
 function requiredSnowflake_(value, label) {
   const text = requiredString_(value, label);
   if (!/^\d{17,20}$/.test(text)) throw new ApiError('VALIDATION_ERROR', `${label}が不正です。`);
+  return text;
+}
+
+function requiredSpreadsheetId_(value) {
+  const text = requiredString_(value, 'イベントスプレッドシートID');
+  if (!/^[a-zA-Z0-9_-]{20,}$/.test(text)) {
+    throw new ApiError('VALIDATION_ERROR', 'イベントスプレッドシートIDが不正です。');
+  }
   return text;
 }
 

@@ -29,13 +29,19 @@ export type EventRecord = {
   discordChannelId: string;
   operationsRoleId: string;
   driveFolderId: string;
+  spreadsheetId: string;
   status: 'active' | 'archived';
   createdAt: string;
 };
 
 export type CreateEventInput = Pick<
   EventRecord,
-  'name' | 'initialBudgetYen' | 'discordGuildId' | 'discordChannelId' | 'operationsRoleId'
+  | 'name'
+  | 'initialBudgetYen'
+  | 'discordGuildId'
+  | 'discordChannelId'
+  | 'operationsRoleId'
+  | 'spreadsheetId'
 >;
 
 export type SettlementTransfer = {

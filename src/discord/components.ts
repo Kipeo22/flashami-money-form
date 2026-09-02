@@ -72,14 +72,14 @@ export function buildExpenseModal(eventId: string, eventName: string): ModalBuil
     );
 
   const receipt = new LabelBuilder()
-    .setLabel('レシート')
-    .setDescription('画像またはPDFを1ファイル添付してください（最大10 MiB）')
+    .setLabel('レシート（任意）')
+    .setDescription('画像は最大20 MB、PDFは最大8 MiBまで')
     .setFileUploadComponent(
       new FileUploadBuilder()
         .setCustomId(COMPONENTS.receipt)
-        .setMinValues(1)
+        .setMinValues(0)
         .setMaxValues(1)
-        .setRequired(true),
+        .setRequired(false),
     );
 
   return new ModalBuilder()

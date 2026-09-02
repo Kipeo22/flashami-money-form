@@ -5,7 +5,7 @@ import type { Logger } from 'pino';
 
 import type { AppConfig } from '../config.js';
 import type { CreateEventInput, EventRecord } from '../domain/types.js';
-import { EventConflictError } from '../gas/repository.js';
+import { EventConfigurationError, EventConflictError } from '../gas/repository.js';
 
 type Flash = { type: 'success' | 'error'; message: string };
 
@@ -90,13 +90,19 @@ export function startWebServer(
     } catch (error) {
       logger.error({ err: error, path: url.pathname }, 'web request failed');
       const message =
-        error instanceof WebInputError || error instanceof EventConflictError
+        error instanceof WebInputError ||
+        error instanceof EventConflictError ||
+        error instanceof EventConfigurationError
           ? error.message
           : '処理に失敗しました。GAS Webアプリの設定を確認してください。';
       const events = await repository.listEvents().catch(() => []);
       sendHtml(
         response,
-        error instanceof WebInputError || error instanceof EventConflictError ? 400 : 500,
+        error instanceof WebInputError ||
+          error instanceof EventConflictError ||
+          error instanceof EventConfigurationError
+          ? 400
+          : 500,
         renderDashboard(events, config, csrfToken, { type: 'error', message }),
       );
     }
@@ -128,13 +134,25 @@ export function parseEventForm(form: URLSearchParams, config: AppConfig): Create
 
   const discordChannelId = parseSnowflake(form.get('discordChannelId'), 'DiscordチャンネルID');
   const operationsRoleId = parseSnowflake(form.get('operationsRoleId'), '運営ロールID');
+  const spreadsheetId = parseSpreadsheetId(form.get('spreadsheet'));
   return {
     name,
     initialBudgetYen,
     discordGuildId: config.discord.guildId,
     discordChannelId,
     operationsRoleId,
+    spreadsheetId,
   };
+}
+
+function parseSpreadsheetId(value: string | null): string {
+  const text = (value ?? '').trim();
+  const urlMatch = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  const id = urlMatch?.[1] ?? text;
+  if (!/^[a-zA-Z0-9_-]{20,}$/.test(id)) {
+    throw new WebInputError('イベントのGoogleスプレッドシートURLまたはIDが正しくありません。');
+  }
+  return id;
 }
 
 function parseSnowflake(value: string | null, label: string): string {
@@ -191,7 +209,8 @@ export function renderDashboard(
           <label>初期予算<input name="initialBudgetYen" inputmode="numeric" value="${config.event.initialBudgetYen}" required><em>円</em></label>
           <label>DiscordチャンネルID<input name="discordChannelId" inputmode="numeric" pattern="[0-9]{17,20}" placeholder="123456789012345678" required></label>
           <label>運営ロールID<input name="operationsRoleId" inputmode="numeric" pattern="[0-9]{17,20}" value="${escapeHtml(config.discord.operationsRoleId)}" required></label>
-          <p class="hint">作成すると専用のDriveフォルダも自動で用意されます。同じDiscordチャンネルに複数の開催中イベントは作成できません。</p>
+          <label>イベントのGoogleスプレッドシート<input name="spreadsheet" placeholder="https://docs.google.com/spreadsheets/d/.../edit" required></label>
+          <p class="hint">指定した既存スプレッドシートへ「収支・精算」タブを追加し、レシート用フォルダを自動作成します。既存のスケジュール・参加者タブは変更しません。</p>
           <button type="submit">イベントを作成</button>
         </form>
       </section>
@@ -205,7 +224,7 @@ function renderEvent(event: EventRecord): string {
   return `<article class="event-card">
     <div class="event-top"><div><span class="status ${event.status}">${event.status === 'active' ? '開催中' : '終了'}</span><h3>${escapeHtml(event.name)}</h3></div><strong>¥${formatYen(event.initialBudgetYen)}</strong></div>
     <dl><div><dt>Discord channel</dt><dd>${escapeHtml(event.discordChannelId)}</dd></div><div><dt>作成日</dt><dd>${formatDate(event.createdAt)}</dd></div></dl>
-    <a href="https://drive.google.com/drive/folders/${encodeURIComponent(event.driveFolderId)}" target="_blank" rel="noreferrer">レシートフォルダを開く ↗</a>
+    <div><a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(event.spreadsheetId)}/edit" target="_blank" rel="noreferrer">収支・精算シートを開く ↗</a> · <a href="https://drive.google.com/drive/folders/${encodeURIComponent(event.driveFolderId)}" target="_blank" rel="noreferrer">レシートフォルダ ↗</a></div>
   </article>`;
 }
 

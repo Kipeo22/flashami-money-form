@@ -18,5 +18,11 @@ describe('event-aware Discord components', () => {
         component.type === 18 ? component.component.type : null,
       ),
     ).toEqual([5, 7, 4, 4, 19]);
+    const receipt = modal.components[4];
+    expect(receipt?.type === 18 ? receipt.component : null).toMatchObject({
+      min_values: 0,
+      max_values: 1,
+      required: false,
+    });
   });
 });
