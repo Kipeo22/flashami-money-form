@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "api/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }

@@ -1,89 +1,91 @@
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  FileUploadBuilder,
-  LabelBuilder,
-  MentionableSelectMenuBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  UserSelectMenuBuilder,
-} from 'discord.js';
+import { COMPONENTS, expenseButtonId, expenseModalChannelId, expenseModalId } from './ids.js';
 
-import { COMPONENTS, expenseButtonId, expenseModalId } from './ids.js';
+type JsonComponent = Record<string, unknown>;
+
+type JsonBuilder<T extends JsonComponent> = {
+  toJSON(): T;
+};
 
 export function buildExpenseButtonRow(eventId: string) {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(expenseButtonId(eventId))
-      .setLabel('支出を登録')
-      .setEmoji('🧾')
-      .setStyle(ButtonStyle.Primary),
-  );
+  return builder({
+    type: 1,
+    components: [
+      {
+        type: 2,
+        custom_id: expenseButtonId(eventId),
+        label: '支出を登録',
+        emoji: { name: '🧾' },
+        style: 1,
+      },
+    ],
+  });
 }
 
-export function buildExpenseModal(eventId: string, eventName: string): ModalBuilder {
-  const payer = new LabelBuilder()
-    .setLabel('誰が？')
-    .setDescription('実際に支払いをした人を選択してください')
-    .setUserSelectMenuComponent(
-      new UserSelectMenuBuilder()
-        .setCustomId(COMPONENTS.payer)
-        .setMinValues(1)
-        .setMaxValues(1)
-        .setRequired(true),
-    );
+export function buildExpenseModal(eventId: string, eventName: string) {
+  return buildExpenseModalWithId(expenseModalId(eventId), `${eventName.slice(0, 36)}｜支出登録`);
+}
 
-  const targets = new LabelBuilder()
-    .setLabel('誰の分？')
-    .setDescription('参加者、または共通予算から出す場合は @運営 のみを選択')
-    .setMentionableSelectMenuComponent(
-      new MentionableSelectMenuBuilder()
-        .setCustomId(COMPONENTS.targets)
-        .setMinValues(1)
-        .setMaxValues(25)
-        .setRequired(true),
-    );
+export function buildChannelExpenseModal(channelId: string) {
+  return buildExpenseModalWithId(expenseModalChannelId(channelId), '支出登録');
+}
 
-  const item = new LabelBuilder()
-    .setLabel('なにを？')
-    .setTextInputComponent(
-      new TextInputBuilder()
-        .setCustomId(COMPONENTS.item)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('例: ガソリン代')
-        .setMinLength(1)
-        .setMaxLength(100)
-        .setRequired(true),
-    );
+function buildExpenseModalWithId(customId: string, title: string) {
+  return builder({
+    custom_id: customId,
+    title,
+    components: [
+      label('誰が？', '実際に支払いをした人を選択してください', {
+        type: 5,
+        custom_id: COMPONENTS.payer,
+        min_values: 1,
+        max_values: 1,
+        required: true,
+      }),
+      label('誰の分？', '参加者、または共通予算から出す場合は @運営 のみを選択', {
+        type: 7,
+        custom_id: COMPONENTS.targets,
+        min_values: 1,
+        max_values: 25,
+        required: true,
+      }),
+      label('なにを？', undefined, {
+        type: 4,
+        custom_id: COMPONENTS.item,
+        style: 1,
+        placeholder: '例: ガソリン代',
+        min_length: 1,
+        max_length: 100,
+        required: true,
+      }),
+      label('金額', '日本円の税込総額を入力してください', {
+        type: 4,
+        custom_id: COMPONENTS.amount,
+        style: 1,
+        placeholder: '例: 12500',
+        min_length: 1,
+        max_length: 20,
+        required: true,
+      }),
+      label('レシート（任意）', '画像は最大20 MB、PDFは最大8 MiBまで', {
+        type: 19,
+        custom_id: COMPONENTS.receipt,
+        min_values: 0,
+        max_values: 1,
+        required: false,
+      }),
+    ],
+  });
+}
 
-  const amount = new LabelBuilder()
-    .setLabel('金額')
-    .setDescription('日本円の税込総額を入力してください')
-    .setTextInputComponent(
-      new TextInputBuilder()
-        .setCustomId(COMPONENTS.amount)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('例: 12500')
-        .setMinLength(1)
-        .setMaxLength(20)
-        .setRequired(true),
-    );
+function label(labelText: string, description: string | undefined, component: JsonComponent) {
+  return {
+    type: 18,
+    label: labelText,
+    ...(description ? { description } : {}),
+    component,
+  };
+}
 
-  const receipt = new LabelBuilder()
-    .setLabel('レシート（任意）')
-    .setDescription('画像は最大20 MB、PDFは最大8 MiBまで')
-    .setFileUploadComponent(
-      new FileUploadBuilder()
-        .setCustomId(COMPONENTS.receipt)
-        .setMinValues(0)
-        .setMaxValues(1)
-        .setRequired(false),
-    );
-
-  return new ModalBuilder()
-    .setCustomId(expenseModalId(eventId))
-    .setTitle(`${eventName.slice(0, 36)}｜支出登録`)
-    .addLabelComponents(payer, targets, item, amount, receipt);
+function builder<T extends JsonComponent>(value: T): JsonBuilder<T> {
+  return { toJSON: () => value };
 }

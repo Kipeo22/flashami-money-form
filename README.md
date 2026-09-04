@@ -1,6 +1,8 @@
 # flashami-money-form
 
-旅行イベント向けの支出入力・集計Discord Botです。簡素なWeb管理画面から複数イベントを作成し、Discordのモーダルから入力した支出をGoogle Apps Script（GAS）経由でイベント別にGoogle SheetsとGoogle Driveへ保存します。
+旅行イベント向けの支出入力・集計Discordアプリです。Vercel上のHTTPエンドポイントでDiscord Interactionsを受け取り、簡素なWeb管理画面から複数イベントを作成します。Discordのモーダルから入力した支出は、Google Apps Script（GAS）経由でイベント別にGoogle SheetsとGoogle Driveへ保存します。
+
+常駐BotやDiscord Gateway接続は使用しません。Discordからリクエストが届いたときだけVercel Functionが起動するため、個人・非商用で利用条件を満たす場合はVercel Hobbyの無料枠で運用できます。
 
 ## MVPの動作
 
@@ -58,6 +60,7 @@ Web管理画面でイベントを作成するときに既存スプレッドシ�
 
 - Node.js 24以上
 - Discord Application / Bot
+- Vercelアカウント
 - Discordサーバー内の `運営` ロール
 - GoogleアカウントとGoogle Apps Script
 - イベント管理用Googleスプレッドシートと保存先Driveフォルダ
@@ -76,12 +79,13 @@ cp .env.example .env
 1. Discord Developer PortalでApplicationとBotを作成する
 2. Botを対象サーバーへ追加する
 3. サーバーに `運営` ロールを作成する
-4. Discordの開発者モードを有効にし、Application ID、Server ID、運営Role IDを取得する
+4. Discordの開発者モードを有効にし、Application ID、Public Key、Server ID、運営Role IDを取得する
 5. `.env` の次の値を設定する
 
 ```dotenv
 DISCORD_TOKEN=ローカルで設定
 DISCORD_CLIENT_ID=Application ID
+DISCORD_PUBLIC_KEY=General Informationに表示されるPublic Key
 DISCORD_GUILD_ID=Server ID
 OPERATIONS_ROLE_ID=運営Role ID
 ```
@@ -153,7 +157,7 @@ openssl rand -hex 32
 
 会社のGoogle Workspaceで「全員」を選択できない場合、管理者ポリシーにより匿名Webアプリが禁止されています。このBotから利用するには、管理者に許可を相談するか、利用可能な別アカウントでGASを所有してください。
 
-GASコードを更新したときは、「デプロイを管理」から新しいバージョンへ更新します。テスト用の `/dev` URLではなく、本番デプロイの `/exec` URLを使用してください。
+GASコードを更新したときは、「デプロイを管理」から新しいバージョンへ更新します。特に、このリポジトリのVercel対応版では支出とレシートを1回の通信で保存する `saveExpense` を使用するため、最新の [`gas/Code.gs`](./gas/Code.gs) を反映してから新しいバージョンへ更新してください。テスト用の `/dev` URLではなく、本番デプロイの `/exec` URLを使用します。
 
 #### 3-6. Botの `.env` を設定する
 
@@ -164,9 +168,68 @@ GAS_SHARED_SECRET=スクリプトプロパティと同じ秘密値
 
 Botはリクエスト本文をHMAC-SHA256で署名します。GAS側では署名、有効時刻、リクエストの再利用、入力値を検証してからSheets／Driveを操作します。
 
-### 4. コマンド登録と起動
+### 4. Vercelへ接続する
 
-管理画面用のユーザー名と12文字以上のパスワードも `.env` に設定します。
+この手順で実際に公開操作を行うのは、Vercelを操作する担当者です。
+
+1. このリポジトリをGitHubへ反映する
+2. Vercel Dashboardで「Add New」→「Project」を開く
+3. 対象リポジトリをImportする
+4. Framework Presetは `Other`、Root Directoryはこのリポジトリのルートを指定する
+5. Environment Variablesへ次を登録する
+
+```dotenv
+DISCORD_TOKEN=Discord Bot Token
+DISCORD_CLIENT_ID=Discord Application ID
+DISCORD_PUBLIC_KEY=Discord Application Public Key
+DISCORD_GUILD_ID=対象Server ID
+OPERATIONS_ROLE_ID=運営Role ID
+GAS_WEB_APP_URL=https://script.google.com/macros/s/デプロイID/exec
+GAS_SHARED_SECRET=GASのSHARED_SECRETと同じ値
+ADMIN_USERNAME=admin以外の推測されにくい名前を推奨
+ADMIN_PASSWORD=十分に長い管理パスワード
+EVENT_NAME=旅行イベント
+INITIAL_BUDGET_YEN=0
+LOG_LEVEL=info
+```
+
+`WEB_HOST` と `PORT` はVercelでは設定しません。秘密値はGit、Discordメッセージ、チャットへ貼り付けないでください。
+
+6. Deployを実行する
+7. 発行されたURLの `/health` が `ok` を返すことを確認する
+8. ルートURLを開き、Basic認証後にイベント管理画面が表示されることを確認する
+
+```text
+管理画面:             https://プロジェクト名.vercel.app/
+稼働確認:             https://プロジェクト名.vercel.app/health
+Discord Interactions: https://プロジェクト名.vercel.app/api/interactions
+```
+
+Vercel Functionsは東京リージョン `hnd1` で動作するように設定しています。DiscordのInteractionにはすぐ応答し、GAS保存は応答後に継続します。支出保存が完了した時点でDiscordのメッセージを更新し、時間のかかる全体集計はその後に実行します。
+
+### 5. DiscordのInteractions Endpointを切り替える
+
+1. Discord Developer Portalで対象Applicationを開く
+2. 「General Information」を開く
+3. 「Interactions Endpoint URL」に次を入力する
+
+```text
+https://プロジェクト名.vercel.app/api/interactions
+```
+
+4. 「Save Changes」を押す
+5. Discordが署名確認用のPINGを送り、保存が成功することを確認する
+6. ローカルの `.env` を設定した状態で、コマンド定義を登録する
+
+```bash
+npm run commands:register
+```
+
+Gateway方式とHTTP方式は同時には使えません。Interactions Endpoint URLを設定した後は、`npm run dev` を起動し続ける必要はありません。
+
+### 6. ローカル確認
+
+管理画面用のユーザー名と12文字以上のパスワードを `.env` に設定します。
 
 ```dotenv
 WEB_HOST=127.0.0.1
@@ -182,9 +245,11 @@ npm run commands:register
 npm run dev
 ```
 
-起動時に `GAS connection initialized` が表示されれば、GAS経由で初期化と集計更新まで完了しています。起動後、`http://127.0.0.1:3000` を開き、イベント名などと一緒に既存のイベントスプレッドシートURLを指定してイベントを作成します。その後、設定したDiscordチャンネルで `/支出登録` を実行してください。
+起動後、`http://127.0.0.1:3000` を開くと管理画面を確認できます。`http://127.0.0.1:3000/health` は `ok` を返します。
 
-1つのBotプロセスで複数イベントを管理するため、イベントごとの再デプロイは不要です。Botを停止するとDiscord入力と管理画面を利用できないため、運用時は常時起動できる環境が必要です。
+ローカルでDiscord Interactionまで確認する場合は、HTTPSトンネルで `http://127.0.0.1:3000` を一時公開し、その `/api/interactions` をDiscord Developer Portalへ設定する必要があります。確認後は必ずVercelの本番URLへ戻してください。
+
+1つのVercelプロジェクトで複数イベントを管理するため、イベントごとの再デプロイは不要です。イベント情報と支出はGAS側に保存し、Vercel Functionのメモリやローカルファイルには依存しません。
 
 ## 開発コマンド
 

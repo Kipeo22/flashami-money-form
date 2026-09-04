@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["hnd1"],
+  "functions": {
+    "api/interactions.ts": { "maxDuration": 300 },
+    "api/admin.ts": { "maxDuration": 300 }
+  },
+  "rewrites": [
+    { "source": "/", "destination": "/api/admin" },
+    { "source": "/events", "destination": "/api/admin" },
+    { "source": "/health", "destination": "/api/health" }
+  ]
+}

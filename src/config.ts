@@ -3,6 +3,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_CLIENT_ID: z.string().min(1),
+  DISCORD_PUBLIC_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/, '64桁の16進数を指定してください'),
   DISCORD_GUILD_ID: z.string().min(1),
   OPERATIONS_ROLE_ID: z.string().min(1),
   GAS_WEB_APP_URL: z.url().refine((value) => value.startsWith('https://'), {
@@ -33,6 +34,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     discord: {
       token: result.data.DISCORD_TOKEN,
       clientId: result.data.DISCORD_CLIENT_ID,
+      publicKey: result.data.DISCORD_PUBLIC_KEY.toLowerCase(),
       guildId: result.data.DISCORD_GUILD_ID,
       operationsRoleId: result.data.OPERATIONS_ROLE_ID,
     },

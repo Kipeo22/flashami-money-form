@@ -171,6 +171,8 @@ function dispatch_(action, payload) {
       return deleteDriveItem_(requiredString_(payload && payload.fileId, 'ファイルID'));
     case 'appendExpense':
       return appendExpense_(payload && payload.row);
+    case 'saveExpense':
+      return saveExpense_(requiredObject_(payload, '支出'));
     case 'readExpenses':
       return readAllEventExpenses_();
     case 'replaceAggregations':
@@ -290,6 +292,38 @@ function appendExpense_(row) {
   requiredNonNegativeInteger_(row[13], '金額');
   appendEventExpense_(findEventRow_(eventId), row);
   return null;
+}
+
+function saveExpense_(payload) {
+  const row = payload.row;
+  if (!Array.isArray(row) || row.length !== EXPENSE_HEADERS.length) {
+    throw new ApiError('VALIDATION_ERROR', '支出データの列数が不正です。');
+  }
+  const expenseId = requiredString_(row[0], '支出ID');
+  const eventId = requiredString_(row[17], 'イベントID');
+  if (hasExpense_(expenseId, eventId)) {
+    throw new ApiError('EXPENSE_CONFLICT', 'この支出は登録済みです。');
+  }
+
+  let uploaded = null;
+  try {
+    if (payload.receipt) {
+      uploaded = uploadReceipt_(requiredObject_(payload.receipt, 'レシート'));
+      row[14] = uploaded.id;
+      row[15] = uploaded.url;
+    }
+    appendExpense_(row);
+    return uploaded;
+  } catch (error) {
+    if (uploaded) {
+      try {
+        deleteDriveItem_(uploaded.id);
+      } catch (cleanupError) {
+        console.error(cleanupError && cleanupError.stack ? cleanupError.stack : cleanupError);
+      }
+    }
+    throw error;
+  }
 }
 
 function replaceAggregations_(payload) {

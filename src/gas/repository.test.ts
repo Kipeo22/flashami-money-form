@@ -14,6 +14,7 @@ const sharedSecret = 'a-secure-shared-secret-with-32-chars';
 const config = loadConfig({
   DISCORD_TOKEN: 'token',
   DISCORD_CLIENT_ID: '123456789012345678',
+  DISCORD_PUBLIC_KEY: 'a'.repeat(64),
   DISCORD_GUILD_ID: '123456789012345678',
   OPERATIONS_ROLE_ID: '223456789012345678',
   GAS_WEB_APP_URL: 'https://script.google.com/macros/s/deployment/exec',
@@ -194,6 +195,32 @@ describe('GasRepository', () => {
     });
   });
 
+  it('stores a receipt and expense in one GAS request', async () => {
+    const repository = new GasRepository(
+      config,
+      mockFetch((request) => {
+        expect(request.action).toBe('saveExpense');
+        expect(request.payload).toMatchObject({
+          receipt: {
+            eventFolderId: 'folder-1',
+            filename: 'receipt.pdf',
+            mimeType: 'application/pdf',
+            base64: 'cmVjZWlwdA==',
+          },
+        });
+        return { ok: true, data: { id: 'file-1', url: 'https://drive.google.com/file-1' } };
+      }),
+    );
+
+    await expect(
+      repository.saveExpense(exampleExpense(), 'folder-1', {
+        buffer: Buffer.from('receipt'),
+        filename: 'receipt.pdf',
+        mimeType: 'application/pdf',
+      }),
+    ).resolves.toEqual({ id: 'file-1', url: 'https://drive.google.com/file-1' });
+  });
+
   it('maps a duplicate append to the domain error', async () => {
     const repository = new GasRepository(
       config,
@@ -226,6 +253,27 @@ describe('GasRepository', () => {
     const repository = new GasRepository(config, fetchImplementation);
 
     await expect(repository.appendExpense(exampleExpense())).resolves.toBeUndefined();
+    expect(calls).toBe(2);
+  });
+
+  it('reconciles an ambiguous combined save response without writing twice', async () => {
+    let calls = 0;
+    const fetchImplementation: typeof fetch = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response('<html>temporary response</html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, data: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const repository = new GasRepository(config, fetchImplementation);
+
+    await expect(repository.saveExpense(exampleExpense(), 'folder-1', null)).resolves.toBeNull();
     expect(calls).toBe(2);
   });
 

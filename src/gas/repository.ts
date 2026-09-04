@@ -37,6 +37,8 @@ type ReceiptUpload = {
   mimeType: string;
 };
 
+type SavedReceipt = { id: string; url: string } | null;
+
 type GasSuccess = { ok: true; data: unknown };
 type GasFailure = { ok: false; error?: { code?: unknown; message?: unknown } };
 
@@ -155,6 +157,44 @@ export class GasRepository {
           if (await this.hasExpense(expense.id, expense.event.id)) return;
         } catch {
           // Keep the original append error when reconciliation also fails.
+        }
+      }
+      throw error;
+    }
+  }
+
+  async saveExpense(
+    expense: Expense,
+    eventFolderId: string,
+    receipt: ReceiptUpload | null,
+  ): Promise<SavedReceipt> {
+    try {
+      const result = await this.request('saveExpense', {
+        row: expenseToRow(expense),
+        receipt: receipt
+          ? {
+              eventFolderId,
+              filename: receipt.filename,
+              mimeType: receipt.mimeType,
+              base64: receipt.buffer.toString('base64'),
+            }
+          : null,
+      });
+      if (result === null) return null;
+      if (!isRecord(result)) throw new Error('GASから不正なレシート保存結果が返されました。');
+      return {
+        id: requiredString(result.id, 'レシートファイルID'),
+        url: requiredString(result.url, 'レシートURL'),
+      };
+    } catch (error) {
+      if (error instanceof GasApiError && error.code === 'EXPENSE_CONFLICT') {
+        throw new ExpenseConflictError(error.message);
+      }
+      if (error instanceof RetryableGasTransportError) {
+        try {
+          if (await this.hasExpense(expense.id, expense.event.id)) return null;
+        } catch {
+          // Keep the original save error when reconciliation also fails.
         }
       }
       throw error;

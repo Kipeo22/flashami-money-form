@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --env-file=.env --import tsx src/index.ts",
-    "start": "node --env-file=.env dist/src/index.js",
+    "start": "node --env-file-if-exists=.env dist/src/index.js",
     "commands:register": "node --env-file=.env --import tsx scripts/register-commands.ts",
     "gas:check": "node scripts/check-gas.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -24,6 +24,7 @@
   "license": "UNLICENSED",
   "type": "module",
   "dependencies": {
+    "@vercel/functions": "^3.9.5",
     "discord.js": "^14.27.0",
     "pino": "^9.14.0",
     "sharp": "^0.35.4",

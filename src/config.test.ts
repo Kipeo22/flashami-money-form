@@ -5,6 +5,7 @@ import { loadConfig } from './config.js';
 const common = {
   DISCORD_TOKEN: 'token',
   DISCORD_CLIENT_ID: '123456789012345678',
+  DISCORD_PUBLIC_KEY: 'a'.repeat(64),
   DISCORD_GUILD_ID: '123456789012345678',
   OPERATIONS_ROLE_ID: '223456789012345678',
   GAS_WEB_APP_URL: 'https://script.google.com/macros/s/deployment/exec',
@@ -20,6 +21,7 @@ describe('loadConfig', () => {
       webAppUrl: 'https://script.google.com/macros/s/deployment/exec',
       sharedSecret: 'a-secure-shared-secret-with-32-chars',
     });
+    expect(config.discord.publicKey).toBe('a'.repeat(64));
   });
 
   it('requires a long shared secret and HTTPS URL', () => {
