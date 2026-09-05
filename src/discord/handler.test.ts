@@ -70,7 +70,7 @@ describe('Discord HTTP interactions', () => {
     expect(repository.findActiveEvent).not.toHaveBeenCalled();
   });
 
-  it('defers a modal immediately, stores it, then updates the reply before aggregation', async () => {
+  it('shows a working message immediately, stores it, then updates the reply before aggregation', async () => {
     const repository = repositoryMock();
     const calls: string[] = [];
     repository.findActiveEvent.mockImplementation(async () => {
@@ -99,7 +99,7 @@ describe('Discord HTTP interactions', () => {
       }),
     );
 
-    expect(await response.json()).toEqual({ type: 5 });
+    expect(await response.json()).toEqual({ type: 4, data: { content: '作業中...' } });
     expect(backgroundTask).toBeDefined();
     await backgroundTask;
     expect(repository.saveExpense).toHaveBeenCalledWith(

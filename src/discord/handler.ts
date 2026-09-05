@@ -13,6 +13,7 @@ import { COMMANDS, COMPONENTS, expenseContextFromModal, eventIdFromComponent } f
 const MAX_RECEIPT_BYTES = 20 * 1000 * 1000;
 const MAX_GAS_BINARY_BYTES = 8 * 1024 * 1024;
 const EPHEMERAL = 64;
+const WORKING_MESSAGE = '作業中...';
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const allowedReceiptExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.pdf']);
@@ -108,7 +109,7 @@ function handleModalSubmit(
   scheduleDeferredInteraction(interaction, dependencies, () =>
     processExpenseModal(interaction, dependencies),
   );
-  return deferredResponse();
+  return workingResponse();
 }
 
 function scheduleDeferredInteraction(
@@ -225,7 +226,7 @@ async function processExpenseModal(
 
   const targetText =
     expense.target.type === 'operations'
-      ? '運営'
+      ? 'Flashami運営'
       : expense.target.members.map(({ name }) => name).join('、');
   const content = [
     `「${expense.event.name}」に支出を登録しました。`,
@@ -313,6 +314,10 @@ async function editOriginalReply(
 
 function deferredResponse(): Response {
   return jsonResponse({ type: 5 });
+}
+
+function workingResponse(): Response {
+  return jsonResponse({ type: 4, data: { content: WORKING_MESSAGE } });
 }
 
 function immediateError(error: unknown): Response {

@@ -21,13 +21,13 @@ describe('classifyTargets', () => {
 
   it('rejects mixing operations and members', () => {
     expect(() => classifyTargets([alice], [operationsRoleId], operationsRoleId)).toThrow(
-      '@運営 と参加者は同時に選択できません',
+      '@Flashami運営 と参加者は同時に選択できません',
     );
   });
 
   it('rejects roles other than operations', () => {
     expect(() => classifyTargets([], ['another-role'], operationsRoleId)).toThrow(
-      '指定された @運営 ロールだけ',
+      '指定された @Flashami運営 ロールだけ',
     );
   });
 });

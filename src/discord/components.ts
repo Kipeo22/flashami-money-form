@@ -41,7 +41,7 @@ function buildExpenseModalWithId(customId: string, title: string) {
         max_values: 1,
         required: true,
       }),
-      label('誰の分？', '参加者、または共通予算から出す場合は @運営 のみを選択', {
+      label('誰の分？', '参加者、または共通予算から出す場合は @Flashami運営 のみを選択', {
         type: 7,
         custom_id: COMPONENTS.targets,
         min_values: 1,
