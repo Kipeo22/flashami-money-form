@@ -78,9 +78,13 @@ describe('event management web screen', () => {
     expect(html).toContain('¥100,000');
     expect(html).toContain('323456789012345678');
     expect(html).toContain('event-spreadsheet');
-    expect(html).toContain('運営の事前支出');
+    expect(html).toContain('運営支出を登録');
     expect(html).toContain('集計を再計算');
     expect(html).toContain('<option value="event-1">夏合宿 2026</option>');
+    expect(html).toContain('管理ダッシュボード');
+    expect(html).toContain('Discord詳細設定');
+    expect(html).toContain('通常は変更不要');
+    expect(html.indexOf('運営ロールID')).toBeGreaterThan(html.indexOf('Discord詳細設定'));
   });
 
   it('refreshes aggregations from the protected management screen', async () => {

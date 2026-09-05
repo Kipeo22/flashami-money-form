@@ -237,7 +237,7 @@ export function renderDashboard(
   const totalBudget = activeEvents.reduce((total, event) => total + event.initialBudgetYen, 0);
   const eventRows =
     events.length === 0
-      ? `<div class="empty"><strong>イベントはまだありません</strong><p>右のフォームから最初の旅行イベントを作成してください。</p></div>`
+      ? `<div class="empty"><strong>イベントはまだありません</strong><p>「新しいイベントを作成」から最初の旅行イベントを登録してください。</p></div>`
       : `<div class="event-list">${events.map(renderEvent).join('')}</div>`;
   const activeEventOptions = activeEvents
     .map((event) => `<option value="${escapeHtml(event.id)}">${escapeHtml(event.name)}</option>`)
@@ -249,15 +249,15 @@ export function renderDashboard(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Flashami Money｜イベント管理</title>
-  <style>${styles}.inline-action{display:block}.secondary-button{border:1px solid #cbd2c8;background:#fff;color:#34483a;padding:10px 14px;font-size:13px}.secondary-button:hover{background:#f3f5f0}</style>
+  <title>Flashami Money｜管理ダッシュボード</title>
+  <style>${styles}${dashboardStyles}</style>
 </head>
 <body>
   <main>
     <header>
       <div class="eyebrow">FLASHAMI MONEY</div>
-      <h1>イベント管理</h1>
-      <p>旅行ごとに予算とDiscordチャンネルを分けて管理します。</p>
+      <h1>管理ダッシュボード</h1>
+      <p>運営支出の登録、イベント管理、集計の確認をここで行います。</p>
     </header>
     ${flash ? `<div class="flash ${flash.type}" role="status">${escapeHtml(flash.message)}</div>` : ''}
     <section class="metrics" aria-label="イベント概要">
@@ -265,10 +265,31 @@ export function renderDashboard(
       <div><span>登録済み</span><strong>${events.length}</strong><small>total</small></div>
       <div><span>開催中の予算</span><strong>¥${formatYen(totalBudget)}</strong><small>JPY</small></div>
     </section>
-    <div class="layout">
-      <section class="panel list-panel">
+    <nav class="quick-nav" aria-label="管理メニュー">
+      <a class="primary-nav" href="#operations-expense"><span>01</span><strong>運営支出を登録</strong><small>共通予算から支払った費用</small></a>
+      <a href="#events"><span>02</span><strong>イベント一覧</strong><small>シートとレシートを確認</small></a>
+      <a href="#new-event"><span>03</span><strong>新しいイベント</strong><small>旅行イベントを追加</small></a>
+    </nav>
+    <section id="operations-expense" class="panel task-panel operations-panel">
+      <div class="section-heading">
+        <div><span>よく使う操作</span><h2>運営支出を登録</h2><p>宿泊予約金など、運営が共通予算から事前に支払った費用を登録します。</p></div>
+        <div class="budget-badge">個人間精算に含めない</div>
+      </div>
+      <form class="compact-form" method="post" action="/expenses/operations">
+        <input type="hidden" name="_csrf" value="${csrfToken}">
+        <input type="hidden" name="_action" value="create-operations-expense">
+        <input type="hidden" name="expenseId" value="web-${randomUUID()}">
+        <label>対象イベント<select name="eventId" required ${activeEvents.length === 0 ? 'disabled' : ''}><option value="">選択してください</option>${activeEventOptions}</select></label>
+        <label>支出内容<input name="item" maxlength="100" placeholder="例：宿泊施設の予約金" required></label>
+        <label>金額<input name="amountYen" inputmode="numeric" placeholder="例：30000" required><em>円</em></label>
+        <button type="submit" ${activeEvents.length === 0 ? 'disabled' : ''}>支出を登録</button>
+      </form>
+      ${activeEvents.length === 0 ? '<p class="form-notice">先に開催中のイベントを作成してください。</p>' : ''}
+    </section>
+    <div class="management-grid">
+      <section id="events" class="panel list-panel">
         <div class="section-heading">
-          <div><span>EVENTS</span><h2>イベント一覧</h2></div>
+          <div><span>イベント管理</span><h2>イベント一覧</h2><p>イベントごとのスプレッドシートとレシートを確認できます。</p></div>
           <form class="inline-action" method="post" action="/aggregations/refresh">
             <input type="hidden" name="_csrf" value="${csrfToken}">
             <input type="hidden" name="_action" value="refresh-aggregations">
@@ -277,30 +298,21 @@ export function renderDashboard(
         </div>
         ${eventRows}
       </section>
-      <section class="panel form-panel">
-        <div class="section-heading"><div><span>NEW EVENT</span><h2>イベント作成</h2></div></div>
+      <section id="new-event" class="panel form-panel">
+        <div class="section-heading"><div><span>初回・追加設定</span><h2>新しいイベントを作成</h2><p>旅行ごとに予算、Discordチャンネル、保存先シートを設定します。</p></div></div>
         <form method="post" action="/events">
           <input type="hidden" name="_csrf" value="${csrfToken}">
           <input type="hidden" name="_action" value="create-event">
           <label>イベント名<input name="name" maxlength="80" placeholder="例：夏合宿 2026" required></label>
           <label>初期予算<input name="initialBudgetYen" inputmode="numeric" value="${config.event.initialBudgetYen}" required><em>円</em></label>
           <label>DiscordチャンネルID<input name="discordChannelId" inputmode="numeric" pattern="[0-9]{17,20}" placeholder="123456789012345678" required></label>
-          <label>運営ロールID<input name="operationsRoleId" inputmode="numeric" pattern="[0-9]{17,20}" value="${escapeHtml(config.discord.operationsRoleId)}" required></label>
           <label>イベントのGoogleスプレッドシート<input name="spreadsheet" placeholder="https://docs.google.com/spreadsheets/d/.../edit" required></label>
-          <p class="hint">指定した既存スプレッドシートへ「収支・精算」タブを追加し、レシート用フォルダを自動作成します。既存のスケジュール・参加者タブは変更しません。</p>
+          <details class="advanced-settings">
+            <summary><span>Discord詳細設定</span><small>通常は変更不要</small></summary>
+            <div><label>運営ロールID<input name="operationsRoleId" inputmode="numeric" pattern="[0-9]{17,20}" value="${escapeHtml(config.discord.operationsRoleId)}" required></label><p class="hint">運営ロールを作り直した場合だけ変更してください。</p></div>
+          </details>
+          <p class="hint">既存スプレッドシートに「収支・精算」タブを追加します。既存のスケジュール・参加者タブは変更しません。</p>
           <button type="submit">イベントを作成</button>
-        </form>
-        <div class="section-divider"></div>
-        <div class="section-heading"><div><span>OPERATIONS EXPENSE</span><h2>運営の事前支出</h2></div></div>
-        <form method="post" action="/expenses/operations">
-          <input type="hidden" name="_csrf" value="${csrfToken}">
-          <input type="hidden" name="_action" value="create-operations-expense">
-          <input type="hidden" name="expenseId" value="web-${randomUUID()}">
-          <label>イベント<select name="eventId" required ${activeEvents.length === 0 ? 'disabled' : ''}><option value="">選択してください</option>${activeEventOptions}</select></label>
-          <label>内容<input name="item" maxlength="100" placeholder="例：宿泊施設の予約金" required></label>
-          <label>金額<input name="amountYen" inputmode="numeric" placeholder="例：30000" required><em>円</em></label>
-          <p class="hint">共通予算から支払う費用として登録し、個人間の精算には含めません。レシートはイベントのスプレッドシートへ後から追記できます。</p>
-          <button type="submit" ${activeEvents.length === 0 ? 'disabled' : ''}>事前支出を登録</button>
         </form>
       </section>
     </div>
@@ -319,6 +331,10 @@ function renderEvent(event: EventRecord): string {
 
 const styles = `
 :root{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic UI",sans-serif;color:#18201b;background:#f2f3ec;font-synthesis:none}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 8% 0%,#fff 0,transparent 30%),#f2f3ec}main{width:min(1180px,calc(100% - 32px));margin:auto;padding:64px 0 80px}header{margin-bottom:32px}.eyebrow,.section-heading span{color:#63725f;font-size:12px;font-weight:750;letter-spacing:.16em}h1{font-size:clamp(36px,7vw,68px);letter-spacing:-.055em;line-height:1;margin:10px 0 14px}header p{color:#68706b;font-size:16px;margin:0}.metrics{display:grid;grid-template-columns:repeat(3,1fr);background:#1d2821;color:#fff;border-radius:22px;padding:8px;margin-bottom:20px}.metrics div{padding:22px 24px;border-right:1px solid #3c4940}.metrics div:last-child{border:0}.metrics span,.metrics small{display:block;color:#aeb8b0;font-size:12px}.metrics strong{display:inline-block;font-size:28px;margin:7px 6px 0 0}.metrics small{display:inline}.layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,.8fr);gap:20px;align-items:start}.panel{background:rgba(255,255,255,.82);border:1px solid #dfe2d9;border-radius:22px;padding:26px;box-shadow:0 18px 50px rgba(34,44,37,.06)}.section-heading{display:flex;justify-content:space-between;align-items:end;margin-bottom:22px}.section-heading h2{font-size:22px;margin:6px 0 0}.section-divider{height:1px;background:#e2e5dd;margin:30px 0}.event-list{display:grid;gap:12px}.event-card{border:1px solid #e2e5dd;border-radius:16px;padding:18px;background:#fff}.event-top{display:flex;justify-content:space-between;gap:16px;align-items:start}.event-top h3{font-size:18px;margin:8px 0 0}.event-top>strong{font-size:20px;white-space:nowrap}.status{display:inline-block;border-radius:100px;padding:4px 8px;background:#e3f1df;color:#37613b;font-size:11px;font-weight:700}.status.archived{background:#ececea;color:#6d706c}.event-card dl{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.event-card dl div{min-width:0}.event-card dt{color:#818781;font-size:11px}.event-card dd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;margin:5px 0 0}.event-card a{color:#415c45;font-size:13px;font-weight:700;text-decoration:none}.empty{padding:56px 20px;text-align:center;color:#727a74;border:1px dashed #ccd1c8;border-radius:16px}.empty strong{color:#263029}.empty p{font-size:13px;margin:8px 0 0}form{display:grid;gap:17px}label{position:relative;display:grid;gap:7px;font-size:13px;font-weight:700}input,select{width:100%;border:1px solid #ccd2c9;background:#fff;border-radius:11px;padding:13px 14px;color:#18201b;font:inherit;outline:none}input:focus,select:focus{border-color:#526c56;box-shadow:0 0 0 3px rgba(82,108,86,.13)}label em{position:absolute;right:13px;bottom:13px;color:#7b827d;font-size:12px;font-style:normal}.hint{color:#737b75;font-size:12px;line-height:1.65;margin:0}button{border:0;border-radius:12px;background:#263a2c;color:#fff;padding:14px 18px;font:inherit;font-weight:750;cursor:pointer}button:hover{background:#19291e}button:disabled,select:disabled{cursor:not-allowed;opacity:.55}.flash{border-radius:12px;padding:13px 16px;margin-bottom:20px;font-size:14px}.flash.success{background:#e1f1df;color:#315536}.flash.error{background:#f8e3df;color:#7a342a}@media(max-width:800px){main{padding-top:38px}.layout{grid-template-columns:1fr}.form-panel{grid-row:1}.metrics{grid-template-columns:1fr}.metrics div{border-right:0;border-bottom:1px solid #3c4940}.event-card dl{grid-template-columns:1fr}}`;
+
+const dashboardStyles = `
+html{scroll-behavior:smooth}header{margin-bottom:28px}header p{max-width:620px;line-height:1.7}.quick-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 20px}.quick-nav a{display:grid;grid-template-columns:auto 1fr;column-gap:12px;align-items:center;border:1px solid #dfe3da;border-radius:16px;padding:17px 18px;background:rgba(255,255,255,.72);color:#1d2821;text-decoration:none;transition:transform .15s ease,border-color .15s ease,background .15s ease}.quick-nav a:hover{transform:translateY(-2px);border-color:#b5c1b3;background:#fff}.quick-nav a>span{grid-row:1/3;color:#8b958d;font:700 12px ui-monospace,SFMono-Regular,Menlo,monospace}.quick-nav strong{font-size:14px}.quick-nav small{color:#7b837d;font-size:11px;margin-top:3px}.quick-nav .primary-nav{background:#263a2c;border-color:#263a2c;color:#fff}.quick-nav .primary-nav span,.quick-nav .primary-nav small{color:#b8c5ba}.task-panel{margin-bottom:20px}.operations-panel{background:linear-gradient(135deg,#f7fbf4,#fff);border-color:#cddbc9}.section-heading{align-items:flex-start}.section-heading p{color:#737b75;font-size:12px;line-height:1.6;margin:8px 0 0;max-width:560px}.budget-badge{border-radius:100px;background:#e3f1df;color:#37613b;font-size:11px;font-weight:700;padding:7px 10px;white-space:nowrap}.compact-form{grid-template-columns:1.1fr 1.5fr .8fr auto;align-items:end}.compact-form button{min-height:47px;white-space:nowrap}.form-notice{color:#8a5b32;background:#fff5e8;border-radius:10px;padding:10px 12px;font-size:12px;margin:14px 0 0}.management-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(330px,.75fr);gap:20px;align-items:start}.inline-action{display:block}.secondary-button{border:1px solid #cbd2c8;background:#fff;color:#34483a;padding:10px 14px;font-size:13px}.secondary-button:hover{background:#f3f5f0}.advanced-settings{border:1px solid #dde2da;border-radius:12px;background:#f8f9f6}.advanced-settings summary{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;cursor:pointer;font-size:13px;font-weight:700}.advanced-settings summary small{color:#7d857f;font-size:11px;font-weight:500}.advanced-settings>div{display:grid;gap:10px;border-top:1px solid #e1e5de;padding:14px}.form-panel{position:sticky;top:20px}@media(max-width:900px){.compact-form{grid-template-columns:1fr 1fr}.compact-form button{grid-column:1/-1}.management-grid{grid-template-columns:1fr}.form-panel{position:static;grid-row:auto}.quick-nav{grid-template-columns:1fr}.quick-nav a{padding:14px 16px}}@media(max-width:600px){.compact-form{grid-template-columns:1fr}.compact-form button{grid-column:auto}.section-heading{gap:14px}.budget-badge{display:none}.secondary-button{padding:9px 10px}.panel{padding:21px}}
+`;
 
 async function readRequestBody(request: Request): Promise<string> {
   const body = await request.text();
