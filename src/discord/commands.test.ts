@@ -12,5 +12,7 @@ describe('Discord commands', () => {
     });
     expect(command?.default_member_permissions).toBeUndefined();
     expect(commandDefinitions.some(({ name }) => name === '支出フォーム')).toBe(false);
+    expect(commandDefinitions.some(({ name }) => name === '集計更新')).toBe(false);
+    expect(commandDefinitions).toHaveLength(1);
   });
 });

@@ -62,7 +62,7 @@ export async function handleDiscordInteraction(
   try {
     const type = requiredNumber(interaction.type, 'Interaction type');
     if (type === 1) return jsonResponse({ type: 1 });
-    if (type === 2) return handleCommand(interaction, dependencies);
+    if (type === 2) return handleCommand(interaction);
     if (type === 3) return handleButton(interaction);
     if (type === 5) return handleModalSubmit(interaction, dependencies);
     return jsonResponse({ type: 4, data: { content: '未対応の操作です。', flags: EPHEMERAL } });
@@ -72,24 +72,13 @@ export async function handleDiscordInteraction(
   }
 }
 
-function handleCommand(interaction: JsonObject, dependencies: InteractionDependencies): Response {
+function handleCommand(interaction: JsonObject): Response {
   const data = requiredRecord(interaction.data, 'Interaction data');
   const commandName = requiredString(data.name, 'Command name');
   const channelId = requiredString(interaction.channel_id, 'Discordチャンネル');
 
   if (commandName === COMMANDS.registerExpense) {
     return jsonResponse({ type: 9, data: buildChannelExpenseModal(channelId).toJSON() });
-  }
-  if (commandName === COMMANDS.refresh) {
-    scheduleDeferredInteraction(interaction, dependencies, async () => {
-      const event = await resolveEventForChannel(interaction, channelId, dependencies.repository);
-      if (!memberHasRole(interaction, event.operationsRoleId)) {
-        throw new UserInputError('運営ロールのメンバーだけが集計を更新できます。');
-      }
-      await dependencies.repository.refreshAggregations();
-      return { content: '精算表と予算集計を更新しました。' };
-    });
-    return deferredResponse();
   }
   throw new UserInputError('未対応のコマンドです。');
 }
@@ -312,10 +301,6 @@ async function editOriginalReply(
   if (!response.ok) throw new Error(`Discord応答の更新に失敗しました (${response.status})。`);
 }
 
-function deferredResponse(): Response {
-  return jsonResponse({ type: 5 });
-}
-
 function workingResponse(): Response {
   return jsonResponse({ type: 4, data: { content: WORKING_MESSAGE } });
 }
@@ -393,17 +378,6 @@ function selectedAttachment(components: JsonObject[], resolved: JsonObject): Raw
   };
 }
 
-async function resolveEventForChannel(
-  interaction: JsonObject,
-  channelId: string,
-  repository: InteractionRepository,
-): Promise<EventRecord> {
-  const guildId = requiredString(interaction.guild_id, 'Discordサーバー');
-  const event = await repository.findActiveEvent(guildId, channelId);
-  if (!event) throw new UserInputError('このチャンネルに有効なイベントがありません。');
-  return event;
-}
-
 function validateEvent(
   event: EventRecord | null,
   guildId: string,
@@ -415,11 +389,6 @@ function validateEvent(
   if (event.discordGuildId !== guildId || event.discordChannelId !== channelId) {
     throw new UserInputError('このイベントが設定されたDiscordチャンネルから登録してください。');
   }
-}
-
-function memberHasRole(interaction: JsonObject, roleId: string): boolean {
-  const member = optionalRecord(interaction.member);
-  return Array.isArray(member?.roles) && member.roles.includes(roleId);
 }
 
 function submittedBy(interaction: JsonObject): Person {

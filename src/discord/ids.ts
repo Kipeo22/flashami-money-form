@@ -1,6 +1,5 @@
 export const COMMANDS = {
   registerExpense: '支出登録',
-  refresh: '集計更新',
 } as const;
 
 export const COMPONENTS = {

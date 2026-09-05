@@ -8,6 +8,8 @@
   "rewrites": [
     { "source": "/", "destination": "/api/admin" },
     { "source": "/events", "destination": "/api/admin" },
+    { "source": "/expenses/operations", "destination": "/api/admin" },
+    { "source": "/aggregations/refresh", "destination": "/api/admin" },
     { "source": "/health", "destination": "/api/health" }
   ]
 }
